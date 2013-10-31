@@ -1,0 +1,11 @@
+*.la
+*.lo
+*.loT
+*.o
+.deps
+.dirstamp
+.libs
+Makefile
+Makefile.in
+setup
+spicec
