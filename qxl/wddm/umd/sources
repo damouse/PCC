@@ -1,5 +1,0 @@
-TARGETNAME=qxlum
-TARGETTYPE=DYNLINK
-SOURCES=qxlum.c
-TARGETLIBS= \
-    $(DDK_LIB_PATH)\kernel32.lib
