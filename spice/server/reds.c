@@ -2727,7 +2727,9 @@ static void reds_handle_read_link_done(void *opaque)
             reds_send_link_error(link, SPICE_LINK_ERR_VERSION_MISMATCH);
             return;
         }
-        spice_warning("Peer doesn't support AUTH selection");
+        
+	//spice_warning("TESTING COMPILATION in reds.c");
+	spice_warning("Peer doesn't support AUTH selection");
         reds_get_spice_ticket(link);
     } else {
         obj->now = (uint8_t *)&link->auth_mechanism;
@@ -3868,6 +3870,8 @@ const char *version_string = VERSION;
 static int do_spice_init(SpiceCoreInterface *core_interface)
 {
     spice_info("starting %s", version_string);
+
+	spice_info("TESTING COMPILATION");
 
     if (core_interface->base.major_version != SPICE_INTERFACE_CORE_MAJOR) {
         spice_warning("bad core interface version");
