@@ -902,6 +902,8 @@ static int main_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, uint
     MainChannel *main_chan = SPICE_CONTAINEROF(rcc->channel, MainChannel, base);
     MainChannelClient *mcc = SPICE_CONTAINEROF(rcc, MainChannelClient, base);
 
+
+
     switch (type) {
     case SPICE_MSGC_MAIN_AGENT_START: {
         SpiceMsgcMainAgentStart *tokens;

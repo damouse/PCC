@@ -143,7 +143,7 @@
 /* #undef USE_OPENGL */
 
 /* Define if supporting smartcard proxying */
-/* #undef USE_SMARTCARD */
+#define USE_SMARTCARD 1
 
 /* Version number of package */
 #define VERSION "noversion"

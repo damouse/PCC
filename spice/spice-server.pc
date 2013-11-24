@@ -5,7 +5,7 @@ includedir=${prefix}/include
 
 Name: spice
 Description: SPICE server library
-Version: 0.12.4.74-58195-dirty
+Version: UNKNOWN-dirty
 
 Requires.private:  glib-2.0 >= 2.22 pixman-1 >= 0.17.7 celt051 >= 0.5.1.1 openssl
 Libs: -L${libdir} -lspice-server
