@@ -29,6 +29,8 @@
 #include "foreign_menu.h"
 #include "controller.h"
 
+#include <iostream>
+
 #ifdef USE_SMARTCARD
 struct SmartcardOptions;
 #endif
@@ -51,6 +53,10 @@ class TestTimer;
 #endif
 #endif // USE_GUI
 
+//mickey
+//#ifndef RED_DEBUG
+//class RED_DEBUG;
+//#endif
 
 class ConnectedEvent: public Event {
 public:

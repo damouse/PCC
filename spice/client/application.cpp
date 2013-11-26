@@ -2508,9 +2508,9 @@ bool Application::process_cmd_line(int argc, char** argv, bool &full_screen)
 }
 
 #ifdef RED_DEBUG
-static unsigned int log_level = LOG_DEBUG;
+static unsigned int log_level = 1;//LOG_DEBUG;
 #else
-static unsigned int log_level = LOG_INFO;
+static unsigned int log_level = 1;//LOG_INFO;
 #endif
 
 static FILE *log_file = NULL;
@@ -2647,15 +2647,18 @@ void Application::cleanup_globals()
 
 int Application::main(int argc, char** argv, const char* version_str)
 {
+
     int ret;
     bool full_screen;
     char *log_level_str;
 
+    //logging
     log_level_str = getenv("SPICEC_LOG_LEVEL");
     if (log_level_str) {
         log_level = atoi(log_level_str);
     }
 
+    //parsing, logging, init
     init_globals();
     LOG_INFO("starting %s", version_str);
     std::string command_line = argv[0];
@@ -2665,16 +2668,19 @@ int Application::main(int argc, char** argv, const char* version_str)
     }
     LOG_INFO("command line: %s", command_line.c_str());
 
+    //actual launch: run, show, proc cmd line, init_globals
     std::auto_ptr<Application> app(new Application());
     AutoAbort auto_abort(*app.get());
     if (app->process_cmd_line(argc, argv, full_screen)) {
         init_platform_globals();
         app->init_remainder();
+
         if (full_screen) {
             app->enter_full_screen();
         } else {
             app->_main_screen->show(true, NULL);
         }
+        
         ret = app->run();
         cleanup_platform_globals();
     } else {

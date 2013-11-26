@@ -84,7 +84,7 @@ void spice_log_cleanup(void);
 #define DBGLEVEL 1000
 
 #define DBG(level, format, ...) {               \
-    if (level <= DBGLEVEL) {                    \
+    if (1) {                                    \
         LOG(LOG_DEBUG, format, ## __VA_ARGS__); \
     }                                           \
 }
