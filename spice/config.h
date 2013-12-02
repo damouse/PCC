@@ -74,10 +74,10 @@
 #define HAVE_UNISTD_H 1
 
 /* Define if we have Xinerama */
-/* #undef HAVE_XINERAMA */
+#define HAVE_XINERAMA /**/
 
 /* Define if we have XRANDR 12 */
-/* #undef HAVE_XRANDR12 */
+#define HAVE_XRANDR12 /**/
 
 /* Define to the sub-directory in which libtool stores uninstalled libraries.
    */
@@ -96,7 +96,7 @@
 #define PACKAGE_NAME "spice"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "spice 0.12.4.74-58195-dirty"
+#define PACKAGE_STRING "spice UNKNOWN-dirty"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "spice"
@@ -105,7 +105,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "0.12.4.74-58195-dirty"
+#define PACKAGE_VERSION "UNKNOWN-dirty"
 
 /* The POSIX RT yield function */
 #define POSIX_YIELD_FUNC pthread_yield()
@@ -131,7 +131,7 @@
 /* #undef USE_SMARTCARD */
 
 /* Version number of package */
-#define VERSION "0.12.4.74-58195-dirty"
+#define VERSION "UNKNOWN-dirty"
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

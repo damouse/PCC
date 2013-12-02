@@ -81,7 +81,7 @@ subdir = .
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/configure $(am__configure_deps) \
 	$(srcdir)/config.h.in build-aux/ar-lib build-aux/compile \
-	build-aux/config.guess build-aux/config.sub \
+	build-aux/config.guess build-aux/config.sub build-aux/depcomp \
 	build-aux/install-sh build-aux/missing build-aux/ltmain.sh \
 	$(top_srcdir)/build-aux/ar-lib $(top_srcdir)/build-aux/compile \
 	$(top_srcdir)/build-aux/config.guess \

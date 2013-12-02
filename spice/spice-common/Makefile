@@ -81,7 +81,7 @@ subdir = .
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/configure $(am__configure_deps) \
 	$(srcdir)/config.h.in build-aux/ar-lib build-aux/compile \
-	build-aux/config.guess build-aux/config.sub \
+	build-aux/config.guess build-aux/config.sub build-aux/depcomp \
 	build-aux/install-sh build-aux/missing build-aux/ltmain.sh \
 	$(top_srcdir)/build-aux/ar-lib $(top_srcdir)/build-aux/compile \
 	$(top_srcdir)/build-aux/config.guess \
@@ -200,14 +200,14 @@ distuninstallcheck_listfiles = find . -type f -print
 am__distuninstallcheck_listfiles = $(distuninstallcheck_listfiles) \
   | sed 's|^\./|$(prefix)/|' | grep -v '$(infodir)/dir$$'
 distcleancheck_listfiles = find . -type f -print
-ACLOCAL = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/missing aclocal-1.13
+ACLOCAL = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/missing aclocal-1.13
 ALLOCA = 
 AMTAR = $${TAR-tar}
 AM_DEFAULT_VERBOSITY = 0
 AR = ar
-AUTOCONF = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/missing autoconf
-AUTOHEADER = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/missing autoheader
-AUTOMAKE = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/missing automake-1.13
+AUTOCONF = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/missing autoconf
+AUTOHEADER = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/missing autoheader
+AUTOMAKE = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/missing automake-1.13
 AWK = gawk
 CC = gcc -std=gnu99
 CCDEPMODE = depmode=gcc3
@@ -243,7 +243,7 @@ LIPO =
 LN_S = ln -s
 LTLIBOBJS = 
 MAINT = 
-MAKEINFO = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/missing makeinfo
+MAKEINFO = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/missing makeinfo
 MANIFEST_TOOL = :
 MKDIR_P = /bin/mkdir -p
 NM = /bin/nm -B
@@ -275,10 +275,10 @@ SMARTCARD_LIBS =
 STRIP = strip
 VERSION = noversion
 XMKMF = 
-abs_builddir = /home/acahn/Private/PCC/spice/spice-common
-abs_srcdir = /home/acahn/Private/PCC/spice/spice-common
-abs_top_builddir = /home/acahn/Private/PCC/spice/spice-common
-abs_top_srcdir = /home/acahn/Private/PCC/spice/spice-common
+abs_builddir = /home/david/programming/PCC2/spice/spice-common
+abs_srcdir = /home/david/programming/PCC2/spice/spice-common
+abs_top_builddir = /home/david/programming/PCC2/spice/spice-common
+abs_top_srcdir = /home/david/programming/PCC2/spice/spice-common
 ac_ct_AR = ar
 ac_ct_CC = gcc
 ac_ct_DUMPBIN = 
@@ -307,7 +307,7 @@ host_vendor = unknown
 htmldir = ${docdir}
 includedir = ${prefix}/include
 infodir = ${datarootdir}/info
-install_sh = ${SHELL} /home/acahn/Private/PCC/spice/spice-common/build-aux/install-sh
+install_sh = ${SHELL} /home/david/programming/PCC2/spice/spice-common/build-aux/install-sh
 libdir = ${exec_prefix}/lib
 libexecdir = ${exec_prefix}/libexec
 localedir = ${datarootdir}/locale

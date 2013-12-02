@@ -78,14 +78,14 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = x86_64-unknown-linux-gnu
 host_triplet = x86_64-unknown-linux-gnu
-#am__append_1 = client
+am__append_1 = client
 subdir = .
 DIST_COMMON = INSTALL NEWS README AUTHORS ChangeLog \
 	$(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/configure $(am__configure_deps) \
 	$(srcdir)/config.h.in $(srcdir)/spice-server.pc.in COPYING \
-	ar-lib compile config.guess config.sub install-sh missing \
-	ltmain.sh
+	ar-lib compile config.guess config.sub depcomp install-sh \
+	missing ltmain.sh
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libtool.m4 \
 	$(top_srcdir)/m4/ltoptions.m4 $(top_srcdir)/m4/ltsugar.m4 \
@@ -231,16 +231,16 @@ distuninstallcheck_listfiles = find . -type f -print
 am__distuninstallcheck_listfiles = $(distuninstallcheck_listfiles) \
   | sed 's|^\./|$(prefix)/|' | grep -v '$(infodir)/dir$$'
 distcleancheck_listfiles = find . -type f -print
-ACLOCAL = ${SHELL} /home/acahn/Private/PCC/spice/missing aclocal-1.13
+ACLOCAL = ${SHELL} /home/david/programming/PCC2/spice/missing aclocal-1.13
 ALLOCA = 
-ALSA_CFLAGS = 
-ALSA_LIBS = 
+ALSA_CFLAGS = -I/usr/include/alsa  
+ALSA_LIBS = -lasound  
 AMTAR = $${TAR-tar}
 AM_DEFAULT_VERBOSITY = 0
 AR = ar
-AUTOCONF = ${SHELL} /home/acahn/Private/PCC/spice/missing autoconf
-AUTOHEADER = ${SHELL} /home/acahn/Private/PCC/spice/missing autoheader
-AUTOMAKE = ${SHELL} /home/acahn/Private/PCC/spice/missing automake-1.13
+AUTOCONF = ${SHELL} /home/david/programming/PCC2/spice/missing autoconf
+AUTOHEADER = ${SHELL} /home/david/programming/PCC2/spice/missing autoheader
+AUTOMAKE = ${SHELL} /home/david/programming/PCC2/spice/missing automake-1.13
 AWK = gawk
 CAC_CARD_CFLAGS = 
 CAC_CARD_LIBS = 
@@ -260,9 +260,9 @@ CPP = gcc -std=gnu99 -E
 CPPFLAGS =   -pthread -lm -lrt
 CXIMAGE_CFLAGS = 
 CXX = g++
-CXXCPP = 
-CXXDEPMODE = depmode=none
-CXXFLAGS = 
+CXXCPP = g++ -E
+CXXDEPMODE = depmode=gcc3
+CXXFLAGS = -g -O2
 CYGPATH_W = echo
 DEFS = -DHAVE_CONFIG_H
 DEPDIR = .deps
@@ -297,10 +297,10 @@ LIPO =
 LN_S = ln -s
 LTLIBOBJS = 
 MAINT = 
-MAKEINFO = ${SHELL} /home/acahn/Private/PCC/spice/missing makeinfo
+MAKEINFO = ${SHELL} /home/david/programming/PCC2/spice/missing makeinfo
 MANIFEST_TOOL = :
-MISC_X_CFLAGS = 
-MISC_X_LIBS = 
+MISC_X_CFLAGS =  
+MISC_X_LIBS = -lXext -lXrender -lX11  
 MKDIR_P = /bin/mkdir -p
 NM = /bin/nm -B
 NMEDIT = 
@@ -312,10 +312,10 @@ OTOOL64 =
 PACKAGE = spice
 PACKAGE_BUGREPORT = spice-devel@lists.freedesktop.org
 PACKAGE_NAME = spice
-PACKAGE_STRING = spice 0.12.4.74-58195-dirty
+PACKAGE_STRING = spice UNKNOWN-dirty
 PACKAGE_TARNAME = spice
 PACKAGE_URL = 
-PACKAGE_VERSION = 0.12.4.74-58195-dirty
+PACKAGE_VERSION = UNKNOWN-dirty
 PATH_SEPARATOR = :
 PIXMAN_CFLAGS = -I/usr/include/pixman-1  
 PIXMAN_LIBS = -lpixman-1  
@@ -336,32 +336,32 @@ SPICEC_STATIC_LINKAGE_BSTATIC =
 SPICE_LT_VERSION = 9:0:8
 SPICE_NONPKGCONFIG_CFLAGS = 
 SPICE_NONPKGCONFIG_LIBS =  -pthread -lm -lrt 
-SPICE_REQUIRES =  glib-2.0 >= 2.22 pixman-1 >= 0.17.7 celt051 >= 0.5.1.1 openssl
+SPICE_REQUIRES =  glib-2.0 >= 2.22 pixman-1 >= 0.17.7 celt051 >= 0.5.1.1 openssl xinerama
 SSL_CFLAGS =  
 SSL_LIBS = -lssl -lcrypto  
 STRIP = strip
-VERSION = 0.12.4.74-58195-dirty
+VERSION = UNKNOWN-dirty
 VISIBILITY_HIDDEN_CFLAGS = -fvisibility=hidden
-WARN_CFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const -Werror -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wnested-externs -Wformat-zero-length -Wpointer-to-int-cast -Wjump-misses-init
-WARN_CXXFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const -Werror
-WARN_LDFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const -Werror -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wnested-externs -Wformat-zero-length -Wpointer-to-int-cast -Wjump-misses-init
+WARN_CFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wnested-externs -Wformat-zero-length -Wpointer-to-int-cast -Wjump-misses-init
+WARN_CXXFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const
+WARN_LDFLAGS =  -Wall -W -Wformat-y2k -Wformat-security -Winit-self -Wmissing-include-dirs -Wunused -Wunknown-pragmas -Wstrict-aliasing -Wpointer-arith -Wcast-align -Wwrite-strings -Wlogical-op -Wmissing-noreturn -Wredundant-decls -Winvalid-pch -Wvolatile-register-var -Wdisabled-optimization -Wbuiltin-macro-redefined -Wmudflap -Wpacked-bitfield-compat -Wsync-nand -Wattributes -Wcoverage-mismatch -Wmultichar -Wcpp -Wdeprecated-declarations -Wdiv-by-zero -Wdouble-promotion -Wendif-labels -Wextra -Wformat-contains-nul -Wformat-extra-args -Wformat=2 -Wmultichar -Wnormalized=nfc -Woverflow -Wpragmas -Wsuggest-attribute=const -Wsuggest-attribute=noreturn -Wsuggest-attribute=pure -Wtrampolines -Wno-sign-compare -Wno-unused-parameter -Wno-format-nonliteral -Wno-ignored-qualifiers -Wno-format-nonliteral -Wframe-larger-than=20460 -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time -fipa-pure-const -Wno-suggest-attribute=pure -Wno-suggest-attribute=const -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wnested-externs -Wformat-zero-length -Wpointer-to-int-cast -Wjump-misses-init
 WINDRES = 
-XFIXES_CFLAGS = 
-XFIXES_LIBS = 
-XINERAMA_CFLAGS = 
-XINERAMA_LIBS = 
-XRANDR12_CFLAGS = 
-XRANDR12_LIBS = 
-XRANDR_CFLAGS = 
-XRANDR_LIBS = 
+XFIXES_CFLAGS =  
+XFIXES_LIBS = -lXfixes  
+XINERAMA_CFLAGS =  
+XINERAMA_LIBS = -lXinerama  
+XRANDR12_CFLAGS =  
+XRANDR12_LIBS = -lXrandr  
+XRANDR_CFLAGS =  
+XRANDR_LIBS = -lXrandr  
 Z_LIBS = -lz
-abs_builddir = /home/acahn/Private/PCC/spice
-abs_srcdir = /home/acahn/Private/PCC/spice
-abs_top_builddir = /home/acahn/Private/PCC/spice
-abs_top_srcdir = /home/acahn/Private/PCC/spice
+abs_builddir = /home/david/programming/PCC2/spice
+abs_srcdir = /home/david/programming/PCC2/spice
+abs_top_builddir = /home/david/programming/PCC2/spice
+abs_top_srcdir = /home/david/programming/PCC2/spice
 ac_ct_AR = ar
 ac_ct_CC = gcc
-ac_ct_CXX = 
+ac_ct_CXX = g++
 ac_ct_DUMPBIN = 
 am__include = include
 am__leading_dot = .
@@ -388,7 +388,7 @@ host_vendor = unknown
 htmldir = ${docdir}
 includedir = ${prefix}/include
 infodir = ${datarootdir}/info
-install_sh = ${SHELL} /home/acahn/Private/PCC/spice/install-sh
+install_sh = ${SHELL} /home/david/programming/PCC2/spice/install-sh
 libdir = ${exec_prefix}/lib
 libexecdir = ${exec_prefix}/libexec
 localedir = ${datarootdir}/locale
