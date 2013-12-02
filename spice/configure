@@ -17127,7 +17127,7 @@ fi
 if test "${enable_client+set}" = set; then :
   enableval=$enable_client;
 else
-  enable_client="no"
+  enable_client="yes"
 fi
 
 if test x"$enable_client" != "xno"; then :

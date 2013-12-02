@@ -2842,11 +2842,12 @@ static RedLinkInfo *reds_init_client_connection(int socket)
         goto error;
     }
 
-    if (setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, sizeof(delay_val)) == -1) {
-        if (errno != ENOTSUP) {
-            spice_warning("setsockopt failed, %s", strerror(errno));
-        }
-    }
+    //CHANGED
+    /* if (setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, sizeof(delay_val)) == -1) { */
+    /*     if (errno != ENOTSUP) { */
+    /*         spice_warning("setsockopt failed, %s", strerror(errno)); */
+    /*     } */
+    /* } */
 
     link = spice_new0(RedLinkInfo, 1);
     stream = spice_new0(RedsStream, 1);
@@ -2958,14 +2959,17 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 static void reds_accept(int fd, int event, void *data)
 {
     int socket;
+    //CHANGED
+    /* if ((socket = accept(reds->listen_socket, NULL, 0)) == -1) { */
+    /*     spice_warning("accept failed, %s", strerror(errno)); */
+    /*     return; */
+    /* } */
 
-    if ((socket = accept(reds->listen_socket, NULL, 0)) == -1) {
-        spice_warning("accept failed, %s", strerror(errno));
-        return;
-    }
-
-    if (spice_server_add_client(reds, socket, 0) < 0)
-        close(socket);
+    //CHANGED
+    if (spice_server_add_client(reds, reds->listen_socket, 0) < 0)
+        close(reds->listen_socket);
+    /* if (spice_server_add_client(reds, socket, 0) < 0) */
+    /*     close(socket); */
 }
 
 
@@ -3015,7 +3019,9 @@ static int reds_init_socket(const char *addr, int portnr, int family)
 
     memset(&ai,0, sizeof(ai));
     ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
-    ai.ai_socktype = SOCK_STREAM;
+    //CHANGED
+    ai.ai_socktype = SOCK_DGRAM;
+    //    ai.ai_socktype = SOCK_STREAM;
     ai.ai_family = family;
 
     snprintf(port, sizeof(port), "%d", portnr);
@@ -3062,11 +3068,12 @@ static int reds_init_socket(const char *addr, int portnr, int family)
 
 listen:
     freeaddrinfo(res);
-    if (listen(slisten,1) != 0) {
-        spice_warning("listen: %s", strerror(errno));
-        close(slisten);
-        return -1;
-    }
+    //CHANGED
+    /* if (listen(slisten,1) != 0) { */
+    /*     spice_warning("listen: %s", strerror(errno)); */
+    /*     close(slisten); */
+    /*     return -1; */
+    /* } */
     return slisten;
 }
 

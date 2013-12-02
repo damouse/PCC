@@ -382,6 +382,8 @@ CursorChannel::CursorChannel(RedClient& client, uint32_t id)
     handler->set_handler(SPICE_MSG_CURSOR_TRAIL, &CursorChannel::handle_cursor_trail);
     handler->set_handler(SPICE_MSG_CURSOR_INVAL_ONE, &CursorChannel::handle_inval_one);
     handler->set_handler(SPICE_MSG_CURSOR_INVAL_ALL, &CursorChannel::handle_inval_all);
+
+    m_ignore = true;
 }
 
 CursorChannel::~CursorChannel()
@@ -608,6 +610,7 @@ void CursorChannel::handle_cursor_move(RedPeer::InMessage* message)
     }
 
     update_display_cursor();
+    
 }
 
 void CursorChannel::handle_cursor_hide(RedPeer::InMessage* message)

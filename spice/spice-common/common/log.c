@@ -83,9 +83,9 @@ void spice_logv(const char *log_domain,
     if (abort_level == -1) {
         abort_level = getenv("SPICE_ABORT_LEVEL") ? atoi(getenv("SPICE_ABORT_LEVEL")) : SPICE_ABORT_LEVEL_DEFAULT;
     }
-
-    if (debug_level < log_level)
-        return;
+    //CHANGED
+    /* if (debug_level < log_level) */
+    /*   return; */
 
     fprintf(stderr, "(%s:%d): ", getenv("_"), getpid());
 

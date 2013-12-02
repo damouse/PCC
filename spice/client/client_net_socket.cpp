@@ -62,16 +62,18 @@ bool ClientNetSocket::connect(uint32_t recv_tokens)
     addr.sin_addr.s_addr = _local_addr.s_addr;
     addr.sin_family = AF_INET;
 
-    if ((_peer = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) == INVALID_SOCKET) {
+    //CHANGED
+    if ((_peer = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
         int err = sock_error();
         THROW("%s: failed to create socket: %s", __FUNCTION__, sock_err_message(err));
     }
 
     no_delay = 1;
-    if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY,
-                   (const char*)&no_delay, sizeof(no_delay)) == SOCKET_ERROR) {
-        LOG_WARN("set TCP_NODELAY failed");
-    }
+    //CHANGED
+    // if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY,
+    //                (const char*)&no_delay, sizeof(no_delay)) == SOCKET_ERROR) {
+    //     LOG_WARN("set TCP_NODELAY failed");
+    // }
 
     LOG_INFO("connect to ip=%s port=%d (connection_id=%d)",
              inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), _id);

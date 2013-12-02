@@ -86,7 +86,9 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
         ai.ai_flags |= AI_ADDRCONFIG;
 #endif
         ai.ai_family = PF_UNSPEC;
-        ai.ai_socktype = SOCK_STREAM;
+        // CHANGED
+        ai.ai_socktype = SOCK_DGRAM;
+        //        ai.ai_socktype = SOCK_STREAM;
         snprintf(port, sizeof(port), "%d", portnr);
         rc = getaddrinfo(host, port, &ai, &result);
         if (rc != 0) {
@@ -100,10 +102,11 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
                 THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
                           sock_err_message(err), err);
             }
-            if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay)) ==
-                SOCKET_ERROR) {
-                LOG_WARN("set TCP_NODELAY failed");
-            }
+            //CHANGED
+            /* if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay)) == */
+            /*     SOCKET_ERROR) { */
+            /*     LOG_WARN("set TCP_NODELAY failed"); */
+            /* } */
 
             getnameinfo((struct sockaddr*)e->ai_addr, e->ai_addrlen,
                         uaddr,INET6_ADDRSTRLEN, uport,32,

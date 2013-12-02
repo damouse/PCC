@@ -88,6 +88,9 @@ private:
     Mutex _update_lock;
     bool _cursor_visible;
     DisplayChannel* _display_channel;
+
+    //my stuff
+    bool  m_ignore;
 };
 
 #endif

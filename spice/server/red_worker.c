@@ -11901,6 +11901,8 @@ static void red_init(RedWorker *worker, WorkerInitData *init_data)
     worker->num_renderers = init_data->num_renderers;
     memcpy(worker->renderers, init_data->renderers, sizeof(worker->renderers));
     worker->renderer = RED_RENDERER_INVALID;
+    //CHANGED
+    //    worker->mouse_mode = SPICE_MOUSE_MODE_CLIENT;
     worker->mouse_mode = SPICE_MOUSE_MODE_SERVER;
     worker->image_compression = init_data->image_compression;
     worker->jpeg_state = init_data->jpeg_state;

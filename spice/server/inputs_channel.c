@@ -21,6 +21,7 @@
 
 #include <netinet/in.h> // IPPROTO_TCP
 #include <netinet/tcp.h> // TCP_NODELAY
+#include <netinet/udp.h>
 #include <fcntl.h>
 #include <stddef.h> // NULL
 #include <errno.h>
@@ -524,7 +525,6 @@ static int inputs_channel_config_socket(RedChannelClient *rcc)
 {
     int delay_val = 1;
     RedsStream *stream = red_channel_client_get_stream(rcc);
-
     if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY,
             &delay_val, sizeof(delay_val)) == -1) {
         if (errno != ENOTSUP && errno != ENOPROTOOPT) {

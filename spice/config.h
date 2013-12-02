@@ -77,7 +77,7 @@
 #define HAVE_XINERAMA /**/
 
 /* Define if we have XRANDR 12 */
-/* #undef HAVE_XRANDR12 */
+#define HAVE_XRANDR12 /**/
 
 /* Define to the sub-directory in which libtool stores uninstalled libraries.
    */
