@@ -102,6 +102,14 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
                 THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
                           sock_err_message(err), err);
             }
+            //CHANGED -adding
+            /* if (bind(_peer, (struct sockaddr *) e->ai_addr, sizeof(*e->ai_addr)) < 0) { */
+            /*     perror("bind failed"); */
+            /*     THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to bind socket: %s (%d)", */
+            /*               sock_err_message(err), err); */
+            /* } */
+            //
+
             //CHANGED
             /* if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay)) == */
             /*     SOCKET_ERROR) { */

@@ -3018,7 +3018,10 @@ static int reds_init_socket(const char *addr, int portnr, int family)
     int slisten,rc;
 
     memset(&ai,0, sizeof(ai));
-    ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+    //CHANGED
+    ai.ai_flags = AI_ADDRCONFIG;
+    //    ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+
     //CHANGED
     ai.ai_socktype = SOCK_DGRAM;
     //    ai.ai_socktype = SOCK_STREAM;
