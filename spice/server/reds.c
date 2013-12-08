@@ -2959,6 +2959,11 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 static void reds_accept(int fd, int event, void *data)
 {
     int socket;
+    char buf[10];
+    //CHANGED ADD
+    //    recv(reds->listen_socket, buf, sizeof(buf), NULL);
+    //
+
     //CHANGED
     /* if ((socket = accept(reds->listen_socket, NULL, 0)) == -1) { */
     /*     spice_warning("accept failed, %s", strerror(errno)); */
@@ -3019,8 +3024,8 @@ static int reds_init_socket(const char *addr, int portnr, int family)
 
     memset(&ai,0, sizeof(ai));
     //CHANGED
-    ai.ai_flags = AI_ADDRCONFIG;
-    //    ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+    //ai.ai_flags = AI_ADDRCONFIG;
+    ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
 
     //CHANGED
     ai.ai_socktype = SOCK_DGRAM;
@@ -3034,7 +3039,7 @@ static int reds_init_socket(const char *addr, int portnr, int family)
                       gai_strerror(rc));
         return -1;
     }
-
+    
     for (e = res; e != NULL; e = e->ai_next) {
         slisten = socket(e->ai_family, e->ai_socktype, e->ai_protocol);
         if (slisten < 0) {

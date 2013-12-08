@@ -129,6 +129,27 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
                 _peer = INVALID_SOCKET;
                 continue;
             }
+
+            //CHANGED - ADD
+            uint8_t buf[10];
+            for(int i = 0; i < sizeof(buf); i++)
+                {
+                    buf[i] = 0;
+                }
+            send(buf, sizeof(buf));
+            send(buf,sizeof(buf));
+            sockaddr_in addr_in;
+            int len = sizeof(addr_in);
+            recvfrom(_peer, buf, sizeof(buf), NULL,(sockaddr*) &addr_in, (socklen_t*) &len);
+            printf("Received IP: %s Port: %i\n", inet_ntoa(addr_in.sin_addr), addr_in.sin_port);
+            if ((_peer = socket(addr_in.sin_family, SOCK_DGRAM, AF_INET)) == INVALID_SOCKET) {
+                int err = sock_error();
+                THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
+                          sock_err_message(err), err);
+
+            }
+
+            //
             DBG(0, "Connected to %s %s", uaddr, uport);
             break;
         }
