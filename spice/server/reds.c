@@ -2958,10 +2958,20 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 
 static void reds_accept(int fd, int event, void *data)
 {
-    int socket;
+    int sock;
     char buf[10];
+    struct sockaddr_in addr_in;
+    int len = sizeof(addr_in);
     //CHANGED ADD
-    //    recv(reds->listen_socket, buf, sizeof(buf), NULL);
+    recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len);
+    printf("Received IP: %s Port: %i\n", inet_ntoa(addr_in.sin_addr), addr_in.sin_port);
+    if ((sock = socket(addr_in.sin_family, SOCK_DGRAM, AF_INET)) == -1) {
+        printf("SOCKET CREATION FAILED\n");
+    }
+
+    if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) {
+        printf("FAILED TO CONNECT\n");
+    }
     //
 
     //CHANGED

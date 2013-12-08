@@ -148,7 +148,16 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
                           sock_err_message(err), err);
 
             }
+            if (::connect(_peer, (sockaddr* )&addr_in,(socklen_t) len) == SOCKET_ERROR) {
+                err = sock_error();
+                LOG_INFO("Connect failed: %s (%d)",
+                         sock_err_message(err), err);
+                closesocket(_peer);
+                _peer = INVALID_SOCKET;
+                continue;
+            }
 
+            
             //
             DBG(0, "Connected to %s %s", uaddr, uport);
             break;
