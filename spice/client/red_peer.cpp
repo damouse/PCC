@@ -131,24 +131,26 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
             }
 
             //CHANGED - ADD
+            printf("HERE\n");
             uint8_t buf[10];
             for(int i = 0; i < sizeof(buf); i++)
                 {
                     buf[i] = 0;
                 }
-            send(buf, sizeof(buf));
-            send(buf,sizeof(buf));
+            //            send(buf, sizeof(buf));//1  //get the event to trigger to accept connection.
+            send(buf,sizeof(buf)); //2
             sockaddr_in addr_in;
             int len = sizeof(addr_in);
-            recvfrom(_peer, buf, sizeof(buf), NULL,(sockaddr*) &addr_in, (socklen_t*) &len);
+            recvfrom(_peer, buf, sizeof(buf), NULL,(sockaddr*) &addr_in, (socklen_t*) &len); //5
             printf("Received IP: %s Port: %i\n", inet_ntoa(addr_in.sin_addr), addr_in.sin_port);
-            if ((_peer = socket(addr_in.sin_family, SOCK_DGRAM, AF_INET)) == INVALID_SOCKET) {
+            if ((_peer = socket(addr_in.sin_family, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
                 int err = sock_error();
                 THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
                           sock_err_message(err), err);
 
             }
-            if (::connect(_peer, (sockaddr* )&addr_in,(socklen_t) len) == SOCKET_ERROR) {
+
+            if (::connect(_peer, (sockaddr* )&addr_in,(socklen_t) len) == SOCKET_ERROR) { //6
                 err = sock_error();
                 LOG_INFO("Connect failed: %s (%d)",
                          sock_err_message(err), err);
@@ -156,6 +158,7 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
                 _peer = INVALID_SOCKET;
                 continue;
             }
+            send(buf, sizeof(buf)); //7
 
             
             //

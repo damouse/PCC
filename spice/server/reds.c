@@ -2961,17 +2961,39 @@ static void reds_accept(int fd, int event, void *data)
     int sock;
     char buf[10];
     struct sockaddr_in addr_in;
+    struct sockaddr_in addr_out; 
+    memset(&addr_in, 0, sizeof(addr_in));
+    memset(&addr_out, 0, sizeof(addr_out));
     int len = sizeof(addr_in);
+    int len_out = sizeof(addr_out);
     //CHANGED ADD
-    recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len);
-    printf("Received IP: %s Port: %i\n", inet_ntoa(addr_in.sin_addr), addr_in.sin_port);
-    if ((sock = socket(addr_in.sin_family, SOCK_DGRAM, AF_INET)) == -1) {
+    recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len); //3
+    addr_out.sin_family = addr_in.sin_family;
+    addr_out.sin_port = htons(addr_in.sin_port);
+    addr_out.sin_addr.s_addr = htonl(addr_in.sin_addr.s_addr);
+    printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    if ((sock = socket(/*addr_out.sin_family*/AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         printf("SOCKET CREATION FAILED\n");
     }
 
-    if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) {
+    /* if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) { */
+    /*     printf("FAILED TO CONNECT\n"); */
+    /* } */
+    
+    printf("Sending to IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    if(sendto(sock, buf, sizeof(buf), NULL, &addr_out, &len_out) == -1) //4
+        {
+            printf("SENDTO ERROR\n");
+            spice_error("sendtoerror, %s", strerror(errno));
+        }
+    recvfrom(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, &len); //8
+    addr_out = addr_in;
+    addr_out.sin_port = ntohs(addr_out.sin_port);
+    printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    if (connect(sock, (struct sockaddr* )&addr_out, len_out) == -1) {
         printf("FAILED TO CONNECT\n");
     }
+    //    send(sock, buf, sizeof(buf), NULL);
     //
 
     //CHANGED
@@ -2981,7 +3003,7 @@ static void reds_accept(int fd, int event, void *data)
     /* } */
 
     //CHANGED
-    if (spice_server_add_client(reds, reds->listen_socket, 0) < 0)
+    if (spice_server_add_client(reds, sock, 0) < 0)
         close(reds->listen_socket);
     /* if (spice_server_add_client(reds, socket, 0) < 0) */
     /*     close(socket); */

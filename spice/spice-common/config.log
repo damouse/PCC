@@ -31,6 +31,14 @@ PATH: /sbin
 PATH: /bin
 PATH: /usr/sbin
 PATH: /usr/bin
+PATH: /usr/lib64/qt-3.3/bin
+PATH: /usr/local/bin
+PATH: /usr/bin
+PATH: /bin
+PATH: /usr/local/sbin
+PATH: /usr/sbin
+PATH: /home/david/.local/bin
+PATH: /home/david/bin
 
 
 ## ----------- ##
@@ -1384,7 +1392,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:62:6: warning: conflicting types for built-in function 'floor' [enabled by default]
  char floor ();
       ^
-/tmp/ccX6ehNe.o: In function `main':
+/tmp/ccx6FUdI.o: In function `main':
 /home/david/programming/PCC/spice/spice-common/conftest.c:73: undefined reference to `floor'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
@@ -1489,7 +1497,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:65:6: warning: conflicting types for built-in function 'pow' [enabled by default]
  char pow ();
       ^
-/tmp/ccKqtdup.o: In function `main':
+/tmp/ccr3NMhN.o: In function `main':
 /home/david/programming/PCC/spice/spice-common/conftest.c:76: undefined reference to `pow'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
@@ -1579,7 +1587,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:65:6: warning: conflicting types for built-in function 'sqrt' [enabled by default]
  char sqrt ();
       ^
-/tmp/cc7GvWgs.o: In function `main':
+/tmp/ccsWLpuQ.o: In function `main':
 /home/david/programming/PCC/spice/spice-common/conftest.c:76: undefined reference to `sqrt'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
