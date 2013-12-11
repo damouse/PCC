@@ -3953,7 +3953,7 @@ static int do_spice_init(SpiceCoreInterface *core_interface)
     reds->main_channel = main_channel_init();
     inputs_init();
 
-    reds->mouse_mode = SPICE_MOUSE_MODE_CLIENT; //acahn::modified
+    reds->mouse_mode = SPICE_MOUSE_MODE_SERVER; //acahn::modified
 
     reds_client_monitors_config_cleanup();
 
