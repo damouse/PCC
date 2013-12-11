@@ -2959,15 +2959,30 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 static void reds_accept(int fd, int event, void *data)
 {
     int sock;
+    int error;
+    int len;
+    int len_out;
     char buf[10];
     struct sockaddr_in addr_in;
     struct sockaddr_in addr_out; 
+    struct addrinfo ai, result;
+    memset(&ai, 0, sizeof(ai));
+    memset(&result, 0, sizeof(result));
     memset(&addr_in, 0, sizeof(addr_in));
     memset(&addr_out, 0, sizeof(addr_out));
-    int len = sizeof(addr_in);
-    int len_out = sizeof(addr_out);
+    len = sizeof(addr_in);
+    len_out = sizeof(addr_out);
+
+    ai.ai_flags = AI_CANONNAME;
+    ai.ai_family = PF_UNSPEC;
+    ai.ai_socktype = SOCK_DGRAM;    
     //CHANGED ADD
     recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len); //3
+    //    error = getaddrinfo(addr_in.sin_addr.s_addr, addr_in.sin_port, &ai, &result);
+    /* if(error != 0) */
+    /*     { */
+    /*         printf("GETADDRINFO FAILED WITH HOST %s", addr_in.sin_addr.s_addr); */
+    /*     } */
     addr_out.sin_family = addr_in.sin_family;
     addr_out.sin_port = htons(addr_in.sin_port);
     addr_out.sin_addr.s_addr = htonl(addr_in.sin_addr.s_addr);
@@ -2981,7 +2996,7 @@ static void reds_accept(int fd, int event, void *data)
     /* } */
     
     printf("Sending to IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
-    if(sendto(sock, buf, sizeof(buf), NULL, &addr_out, &len_out) == -1) //4
+    if(sendto(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, len) == -1) //4
         {
             printf("SENDTO ERROR\n");
             spice_error("sendtoerror, %s", strerror(errno));
@@ -2990,7 +3005,7 @@ static void reds_accept(int fd, int event, void *data)
     addr_out = addr_in;
     addr_out.sin_port = ntohs(addr_out.sin_port);
     printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
-    if (connect(sock, (struct sockaddr* )&addr_out, len_out) == -1) {
+    if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) {
         printf("FAILED TO CONNECT\n");
     }
     //    send(sock, buf, sizeof(buf), NULL);
