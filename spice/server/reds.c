@@ -2977,7 +2977,7 @@ static void reds_accept(int fd, int event, void *data)
     ai.ai_family = PF_UNSPEC;
     ai.ai_socktype = SOCK_DGRAM;    
     //CHANGED ADD
-    recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len); //3
+    recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len); //2
     //    error = getaddrinfo(addr_in.sin_addr.s_addr, addr_in.sin_port, &ai, &result);
     /* if(error != 0) */
     /*     { */
@@ -2996,16 +2996,16 @@ static void reds_accept(int fd, int event, void *data)
     /* } */
     
     printf("Sending to IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
-    if(sendto(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, len) == -1) //4
+    if(sendto(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, len) == -1) //3
         {
             printf("SENDTO ERROR\n");
             spice_error("sendtoerror, %s", strerror(errno));
         }
-    recvfrom(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, &len); //8
+    recvfrom(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, &len); //7
     addr_out = addr_in;
     addr_out.sin_port = ntohs(addr_out.sin_port);
     printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
-    if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) {
+    if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) { //8
         printf("FAILED TO CONNECT\n");
     }
     //    send(sock, buf, sizeof(buf), NULL);
