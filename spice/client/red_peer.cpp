@@ -18,7 +18,6 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
-
 #ifdef WIN32
 #include <winsock2.h>
 #endif
@@ -165,6 +164,7 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
             }
             printf("Sending to new socket\n");
             send(buf, sizeof(buf)); //6
+            sleep(5);
 
             
             //

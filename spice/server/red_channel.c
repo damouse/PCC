@@ -540,21 +540,22 @@ static void red_channel_client_send_ping(RedChannelClient *rcc)
          * roundtrip measurment is less accurate (bigger).
          */
         rcc->latency_monitor.tcp_nodelay = 1;
-        if (getsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val,
-                       &opt_size) == -1) {
-            spice_warning("getsockopt failed, %s", strerror(errno));
-        }  else {
-            rcc->latency_monitor.tcp_nodelay = delay_val;
-            if (!delay_val) {
-                delay_val = 1;
-                if (setsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val,
-                               sizeof(delay_val)) == -1) {
-                   if (errno != ENOTSUP) {
-                        spice_warning("setsockopt failed, %s", strerror(errno));
-                    }
-                }
-            }
-        }
+	//CHANGED
+        /* if (getsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, */
+        /*                &opt_size) == -1) { */
+        /*     spice_warning("getsockopt failed, %s", strerror(errno)); */
+        /* }  else { */
+        /*     rcc->latency_monitor.tcp_nodelay = delay_val; */
+        /*     if (!delay_val) { */
+        /*         delay_val = 1; */
+        /*         if (setsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, */
+        /*                        sizeof(delay_val)) == -1) { */
+        /*            if (errno != ENOTSUP) { */
+        /*                 spice_warning("setsockopt failed, %s", strerror(errno)); */
+        /*             } */
+        /*         } */
+        /*     } */
+        /* } */
     }
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_PING, NULL);
@@ -1499,12 +1500,13 @@ static void red_channel_client_handle_pong(RedChannelClient *rcc, SpiceMsgPing *
     if (!rcc->latency_monitor.tcp_nodelay) {
         int delay_val = 0;
 
-        if (setsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val,
-                       sizeof(delay_val)) == -1) {
-            if (errno != ENOTSUP) {
-                spice_warning("setsockopt failed, %s", strerror(errno));
-            }
-        }
+	//CHANGED
+        /* if (setsockopt(rcc->stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, */
+        /*                sizeof(delay_val)) == -1) { */
+        /*     if (errno != ENOTSUP) { */
+        /*         spice_warning("setsockopt failed, %s", strerror(errno)); */
+        /*     } */
+        /* } */
     }
 
     /*

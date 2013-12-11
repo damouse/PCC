@@ -10142,12 +10142,13 @@ static int common_channel_config_socket(RedChannelClient *rcc)
      * the application level.
      * see: http://www.stuartcheshire.org/papers/NagleDelayedAck/
      */
-    if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val,
-                   sizeof(delay_val)) == -1) {
-        if (errno != ENOTSUP) {
-            spice_warning("setsockopt failed, %s", strerror(errno));
-        }
-    }
+    //CHANGED
+    /* if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, &delay_val, */
+    /*                sizeof(delay_val)) == -1) { */
+    /*     if (errno != ENOTSUP) { */
+    /*         spice_warning("setsockopt failed, %s", strerror(errno)); */
+    /*     } */
+    /* } */
     return TRUE;
 }
 

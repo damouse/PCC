@@ -197,13 +197,14 @@ static int spicevmc_red_channel_client_config_socket(RedChannelClient *rcc)
     RedsStream *stream = red_channel_client_get_stream(rcc);
 
     if (rcc->channel->type == SPICE_CHANNEL_USBREDIR) {
-        if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY,
-                &delay_val, sizeof(delay_val)) != 0) {
-            if (errno != ENOTSUP && errno != ENOPROTOOPT) {
-                spice_printerr("setsockopt failed, %s", strerror(errno));
-                return FALSE;
-            }
-        }
+      //CHANGED
+        /* if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, */
+        /*         &delay_val, sizeof(delay_val)) != 0) { */
+        /*     if (errno != ENOTSUP && errno != ENOPROTOOPT) { */
+        /*         spice_printerr("setsockopt failed, %s", strerror(errno)); */
+        /*         return FALSE; */
+        /*     } */
+        /* } */
     }
 
     return TRUE;

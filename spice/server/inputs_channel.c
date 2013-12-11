@@ -525,13 +525,14 @@ static int inputs_channel_config_socket(RedChannelClient *rcc)
 {
     int delay_val = 1;
     RedsStream *stream = red_channel_client_get_stream(rcc);
-    if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY,
-            &delay_val, sizeof(delay_val)) == -1) {
-        if (errno != ENOTSUP && errno != ENOPROTOOPT) {
-            spice_printerr("setsockopt failed, %s", strerror(errno));
-            return FALSE;
-        }
-    }
+    //CHANGED
+    /* if (setsockopt(stream->socket, IPPROTO_TCP, TCP_NODELAY, */
+    /*         &delay_val, sizeof(delay_val)) == -1) { */
+    /*     if (errno != ENOTSUP && errno != ENOPROTOOPT) { */
+    /*         spice_printerr("setsockopt failed, %s", strerror(errno)); */
+    /*         return FALSE; */
+    /*     } */
+    /* } */
 
     return TRUE;
 }

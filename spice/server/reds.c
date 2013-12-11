@@ -3018,6 +3018,7 @@ static void reds_accept(int fd, int event, void *data)
     /* } */
 
     //CHANGED
+    printf("SOCKET FD: %i\n", sock);
     if (spice_server_add_client(reds, sock, 0) < 0)
         close(reds->listen_socket);
     /* if (spice_server_add_client(reds, socket, 0) < 0) */
