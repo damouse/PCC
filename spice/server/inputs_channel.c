@@ -379,6 +379,7 @@ static int inputs_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, ui
             red_channel_client_pipe_add_type(rcc, PIPE_ITEM_MOUSE_MOTION_ACK);
             icc->motion_count = 0;
         }
+        printf("reds_get_mouse_mode: %d\n\n", reds_get_mouse_mode());
         if (reds_get_mouse_mode() != SPICE_MOUSE_MODE_CLIENT) {
             break;
         }

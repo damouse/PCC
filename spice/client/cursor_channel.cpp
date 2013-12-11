@@ -527,7 +527,7 @@ void CursorChannel::set_cursor(SpiceCursor& red_cursor, int x, int y, bool visib
     lock.unlock();
 
     update_display_cursor();
-
+    printf("530 mouse mode: %d\n", get_client().get_mouse_mode()); //acahn::modified
     if (get_client().get_mouse_mode() == SPICE_MOUSE_MODE_SERVER) {
         if (_cursor_visible) {
             set_rect_area(_cursor_rect);
@@ -601,7 +601,7 @@ void CursorChannel::handle_cursor_move(RedPeer::InMessage* message)
     _cursor_rect.top += dy;
     _cursor_rect.bottom += dy;
     lock.unlock();
-
+     printf("604 mouse mode: %d\n", get_client().get_mouse_mode()); //acahn::modified
     if (get_client().get_mouse_mode() == SPICE_MOUSE_MODE_SERVER) {
         set_rect_area(_cursor_rect);
         return;
@@ -616,7 +616,7 @@ void CursorChannel::handle_cursor_hide(RedPeer::InMessage* message)
 
     _cursor_visible = false;
     update_display_cursor();
-
+     printf("619 mouse mode: %d\n", get_client().get_mouse_mode()); //acahn::modified
     if (get_client().get_mouse_mode() == SPICE_MOUSE_MODE_SERVER) {
         clear_area();
     }
@@ -642,7 +642,7 @@ void CursorChannel::handle_inval_all(RedPeer::InMessage* message)
 void CursorChannel::on_mouse_mode_change()
 {
     Lock lock(_update_lock);
-
+     printf("645 mouse mode: %d\n", get_client().get_mouse_mode()); //acahn::modified
     if (get_client().get_mouse_mode() == SPICE_MOUSE_MODE_CLIENT) {
         clear_area();
         return;

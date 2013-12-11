@@ -262,7 +262,7 @@ int red_dispatcher_qxl_count(void)
 static void update_client_mouse_allowed(void)
 {
     static int allowed = FALSE;
-    int allow_now = FALSE;
+    int allow_now = TRUE;
     int x_res = 0;
     int y_res = 0;
 
@@ -288,6 +288,7 @@ static void update_client_mouse_allowed(void)
         allowed = allow_now;
         reds_set_client_mouse_allowed(allowed, x_res, y_res);
     }
+    printf("in update_client_mouse_is_allowed, allowed: %d\n", allowed); //acahn::modified
 }
 
 static void red_dispatcher_update_area(RedDispatcher *dispatcher, uint32_t surface_id,

@@ -277,7 +277,7 @@ static PipeItem *main_init_item_new(MainChannelClient *mcc,
     int ram_hint)
 {
     InitPipeItem *item = spice_malloc(sizeof(InitPipeItem));
-
+    printf("in main_init_item_new, value: %d\ncurrent_mode: %d\n\n\n", is_client_mouse_allowed, current_mouse_mode); //acahn::modified
     red_channel_pipe_item_init(mcc->base.channel, &item->base,
                                PIPE_ITEM_TYPE_MAIN_INIT);
     item->connection_id = connection_id;
@@ -414,6 +414,7 @@ static void main_channel_marshall_mouse_mode(RedChannelClient *rcc,
     red_channel_client_init_send_data(rcc, SPICE_MSG_MAIN_MOUSE_MODE, &item->base);
     mouse_mode.supported_modes = SPICE_MOUSE_MODE_SERVER;
     if (item->is_client_mouse_allowed) {
+        printf("HERE I AM\n\n\n"); //acahn::modified
         mouse_mode.supported_modes |= SPICE_MOUSE_MODE_CLIENT;
     }
     mouse_mode.current_mode = item->current_mode;
@@ -530,7 +531,7 @@ void main_channel_push_init(MainChannelClient *mcc,
     int ram_hint)
 {
     PipeItem *item;
-
+    printf("in main_channel_push_init, value %d\n", is_client_mouse_allowed); //acahn::modified
     item = main_init_item_new(mcc,
              mcc->connection_id, display_channels_hint, current_mouse_mode,
              is_client_mouse_allowed, multi_media_time, ram_hint);

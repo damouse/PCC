@@ -142,7 +142,7 @@ fi
 
 AC_ARG_ENABLE(client,
 [  --enable-client         Enable spice client],,
-[enable_client="no"])
+[enable_client="yes"])
 AS_IF([test x"$enable_client" != "xno"], [enable_client="yes"])
 AM_CONDITIONAL(SUPPORT_CLIENT, test "x$enable_client" = "xyes")
 

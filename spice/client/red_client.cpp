@@ -1086,6 +1086,8 @@ void RedClient::handle_init(RedPeer::InMessage* message)
         calc_pixmap_cach_and_glz_window_size(init->display_channels_hint, init->ram_hint);
     }
     set_mouse_mode(init->supported_mouse_modes, init->current_mouse_mode);
+    //acahn::modified
+    printf("ALLOWED MODES: %d\nCURRENT MOUSE MODE: %u\n",init->supported_mouse_modes, init->current_mouse_mode);
     _agent_tokens = init->agent_tokens;
     _agent_connected = !!init->agent_connected;
     if (_agent_connected) {
@@ -1123,6 +1125,7 @@ void RedClient::handle_channels(RedPeer::InMessage* message)
 void RedClient::handle_mouse_mode(RedPeer::InMessage* message)
 {
     SpiceMsgMainMouseMode *mouse_mode = (SpiceMsgMainMouseMode *)message->data();
+    printf("in handle_mouse_mode, supported: %d, current: %d\n\n", mouse_mode->supported_modes, mouse_mode->current_mode); //acahn::modified 
     set_mouse_mode(mouse_mode->supported_modes, mouse_mode->current_mode);
 }
 

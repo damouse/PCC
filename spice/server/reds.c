@@ -635,6 +635,7 @@ int reds_get_mouse_mode(void)
 
 static void reds_set_mouse_mode(uint32_t mode)
 {
+    printf("in reds_set_mouse_mode, value: %d\n\n", mode); //acahn::modified
     if (reds->mouse_mode == mode) {
         return;
     }
@@ -652,18 +653,22 @@ static void reds_update_mouse_mode(void)
 {
     int allowed = 0;
     int qxl_count = red_dispatcher_qxl_count();
-
+    printf("in reds_update_mouse_mode, 656, agent_mouse = %d, vdagent = %d\n", agent_mouse, vdagent);
     if ((agent_mouse && vdagent) || (inputs_has_tablet() && qxl_count == 1)) {
         allowed = reds->dispatcher_allows_client_mouse;
+        printf("in reds_update_mouse_mode, 658, value = %d\n", allowed); //acahn::modified
     }
+    printf("in reds_update_mouse_mode, 660, value = %d\n", reds->is_client_mouse_allowed); //acahn::modified
     if (allowed == reds->is_client_mouse_allowed) {
         return;
     }
-    reds->is_client_mouse_allowed = allowed;
-    if (reds->mouse_mode == SPICE_MOUSE_MODE_CLIENT && !allowed) {
-        reds_set_mouse_mode(SPICE_MOUSE_MODE_SERVER);
-        return;
-    }
+     reds->is_client_mouse_allowed = allowed;
+     printf("in reds_update_mouse_mode, 664, value = %d\n", allowed); //acahn::modified
+     if (reds->mouse_mode == SPICE_MOUSE_MODE_CLIENT && !allowed) {
+         printf("FAIL FAIL FAIL FAIL"); //acahn::modified
+         reds_set_mouse_mode(SPICE_MOUSE_MODE_SERVER);
+         return;
+     }
     if (reds->main_channel) {
         main_channel_push_mouse_mode(reds->main_channel, reds->mouse_mode,
                                      reds->is_client_mouse_allowed);
@@ -1150,12 +1155,14 @@ void reds_on_main_mouse_mode_request(void *message, size_t size)
     switch (((SpiceMsgcMainMouseModeRequest *)message)->mode) {
     case SPICE_MOUSE_MODE_CLIENT:
         if (reds->is_client_mouse_allowed) {
+            printf("in reds_on_main_mouse_mode_request setting client\n\n");
             reds_set_mouse_mode(SPICE_MOUSE_MODE_CLIENT);
         } else {
             spice_info("client mouse is disabled");
         }
         break;
     case SPICE_MOUSE_MODE_SERVER:
+         printf("in reds_on_main_mouse_mode_request  setting server\n\n");
         reds_set_mouse_mode(SPICE_MOUSE_MODE_SERVER);
         break;
     default:
@@ -1704,8 +1711,10 @@ static void reds_handle_main_link(RedLinkInfo *link)
     }
 
     if (!mig_target) {
+        printf("in reds_handle_main_link, value: %d\n reds_mouse_mode: %d\n\n", reds->is_client_mouse_allowed, reds->mouse_mode); //acahn::modified
+        
         main_channel_push_init(mcc, red_dispatcher_count(),
-            reds->mouse_mode, reds->is_client_mouse_allowed,
+            reds->mouse_mode, reds->is_client_mouse_allowed, //acahn::modified
             reds_get_mm_time() - MM_TIME_DELTA,
             red_dispatcher_qxl_ram_size());
         if (spice_name)
@@ -1732,6 +1741,7 @@ void reds_set_client_mouse_allowed(int is_client_mouse_allowed, int x_res, int y
 {
     reds->monitor_mode.x_res = x_res;
     reds->monitor_mode.y_res = y_res;
+    printf("in reds_set_client_mouse_allowed, value: %d\n", is_client_mouse_allowed); //acahn::modified
     reds->dispatcher_allows_client_mouse = is_client_mouse_allowed;
     reds_update_mouse_mode();
     if (reds->is_client_mouse_allowed && inputs_has_tablet()) {
@@ -1848,6 +1858,7 @@ void reds_on_client_semi_seamless_migrate_complete(RedClient *client)
     mcc = red_client_get_main(client);
 
     // TODO: not doing net test. consider doing it on client_migrate_info
+    printf("in reds_on_client_semi_seamless, value: %d", reds->is_client_mouse_allowed); //acahn::modified
     main_channel_push_init(mcc, red_dispatcher_count(),
                            reds->mouse_mode, reds->is_client_mouse_allowed,
                            reds_get_mm_time() - MM_TIME_DELTA,
@@ -3942,7 +3953,7 @@ static int do_spice_init(SpiceCoreInterface *core_interface)
     reds->main_channel = main_channel_init();
     inputs_init();
 
-    reds->mouse_mode = SPICE_MOUSE_MODE_SERVER;
+    reds->mouse_mode = SPICE_MOUSE_MODE_CLIENT; //acahn::modified
 
     reds_client_monitors_config_cleanup();
 
@@ -3964,6 +3975,8 @@ SPICE_GNUC_VISIBLE SpiceServer *spice_server_new(void)
     spice_assert(reds == NULL);
 
     reds = spice_new0(RedsState, 1);
+    // Initialize server mouse mode to client
+    reds->is_client_mouse_allowed = TRUE; //acahn:modified
     return reds;
 }
 
@@ -4245,7 +4258,7 @@ SPICE_GNUC_VISIBLE int spice_server_get_peer_info(SpiceServer *s, struct sockadd
 SPICE_GNUC_VISIBLE int spice_server_is_server_mouse(SpiceServer *s)
 {
     spice_assert(reds == s);
-    return reds->mouse_mode == SPICE_MOUSE_MODE_SERVER;
+    return reds->mouse_mode == SPICE_MOUSE_MODE_CLIENT;
 }
 
 SPICE_GNUC_VISIBLE int spice_server_add_renderer(SpiceServer *s, const char *name)

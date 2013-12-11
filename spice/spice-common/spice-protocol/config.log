@@ -77,6 +77,7 @@ config.status:814: creating Makefile
 config.status:814: creating spice-protocol.pc
 config.status:814: creating spice/Makefile
 config.status:814: creating config.h
+config.status:995: config.h is unchanged
 
 ## ---------------- ##
 ## Cache variables. ##

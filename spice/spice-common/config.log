@@ -1384,7 +1384,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:62:6: warning: conflicting types for built-in function 'floor' [enabled by default]
  char floor ();
       ^
-/tmp/cc9eb04M.o: In function `main':
+/tmp/cckHiiFw.o: In function `main':
 /home/acahn/Private/PCC/spice/spice-common/conftest.c:73: undefined reference to `floor'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
@@ -1489,7 +1489,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:65:6: warning: conflicting types for built-in function 'pow' [enabled by default]
  char pow ();
       ^
-/tmp/cc4t8jE1.o: In function `main':
+/tmp/ccjezfjO.o: In function `main':
 /home/acahn/Private/PCC/spice/spice-common/conftest.c:76: undefined reference to `pow'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
@@ -1579,7 +1579,7 @@ configure:14038: gcc -std=gnu99 -o conftest -g -O2   conftest.c  >&5
 conftest.c:65:6: warning: conflicting types for built-in function 'sqrt' [enabled by default]
  char sqrt ();
       ^
-/tmp/ccUbMTf6.o: In function `main':
+/tmp/ccE7MzuS.o: In function `main':
 /home/acahn/Private/PCC/spice/spice-common/conftest.c:76: undefined reference to `sqrt'
 collect2: error: ld returned 1 exit status
 configure:14038: $? = 1
@@ -1689,6 +1689,7 @@ config.status:1123: creating Makefile
 config.status:1123: creating common/Makefile
 config.status:1123: creating python_modules/Makefile
 config.status:1123: creating config.h
+config.status:1304: config.h is unchanged
 config.status:1352: executing depfiles commands
 config.status:1352: executing libtool commands
 configure:16523: === configuring in spice-protocol (/home/acahn/Private/PCC/spice/spice-common/spice-protocol)
