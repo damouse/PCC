@@ -123,6 +123,9 @@ int agent_file_xfer = TRUE;
 static bool exit_on_disconnect = FALSE;
 
 static RedsState *reds = NULL;
+//CHANGED -add
+char* readBuffer;
+static const int READBUFFERSIZE = 1000000000;
 
 typedef struct AsyncRead {
     RedsStream *stream;
@@ -233,9 +236,75 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
     return ret;
 }
 
+//CHANGED -add
+int read_offset;
+int write_offset;
 static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
 {
-    return read(s->socket, buf, size);
+    //CHANGED -add
+    int readSize = 10000;
+    int howMuchRead = 0;
+    char* ourBuffer = (char*) malloc(readSize);
+    if(readSize = read(s->socket, ourBuffer, readSize) != -1)
+        {
+            if(read_offset < write_offset)
+                {
+                    memcpy(ourBuffer, readBuffer + write_offset, readSize);
+                }
+            else
+                {
+                    int cpySoFar = READBUFFERSIZE - write_offset;
+                    memcpy(ourBuffer, readBuffer + write_offset, cpySoFar);
+                    memcpy(ourBuffer + cpySoFar, readBuffer, readSize - cpySoFar);
+                }
+            write_offset = (write_offset + readSize) % READBUFFERSIZE;
+        }
+    if(read_offset != write_offset)
+                {
+                    if(read_offset < write_offset) //normal case
+                        {
+                            if(read_offset - write_offset < size) //want to read more than is there
+                                {
+                                    howMuchRead = read_offset - write_offset;
+                                    memcpy(buf, readBuffer +read_offset, howMuchRead);
+                                }
+                            else //we can read full size
+                                {
+                                    memcpy(buf, readBuffer + read_offset, size);
+                                    howMuchRead = size;
+                                }
+                            read_offset += howMuchRead;
+                            
+                        }
+                    else //write buffer has wrapped around
+                        {           
+                            if(read_offset + size > READBUFFERSIZE) //then wraparound
+                                {
+                                    int  readSoFar = READBUFFERSIZE - read_offset;
+                                    memcpy(buf, readBuffer + read_offset, READBUFFERSIZE - read_offset);
+                                    if(write_offset < size - (READBUFFERSIZE - read_offset))//we want to read more than is there
+                                        { 
+                                            memcpy(buf + readSoFar, readBuffer, write_offset);
+                                            howMuchRead = readSoFar + write_offset;
+                                        }
+                                    else //there is plenty there to read what they want
+                                        {
+                                            memcpy(buf + readSoFar, readBuffer, size - readSoFar);
+                                            howMuchRead = size;
+                                        }
+                                    read_offset = howMuchRead - (READBUFFERSIZE - read_offset);
+                                }
+                        }
+                    return howMuchRead;
+                }
+            else
+                {
+                    return -1;
+                }
+    
+    //CHANGED - commented out
+    //    return read(s->socket, buf, size);
+    //
 }
 
 static ssize_t stream_ssl_write_cb(RedsStream *s, const void *buf, size_t size)
@@ -2955,9 +3024,20 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
     }
 }
 
+void allocateReadBuffer()
+{
+    readBuffer = (char*)malloc(READBUFFERSIZE);
+    memset(readBuffer, 0, READBUFFERSIZE);
+}
 
 static void reds_accept(int fd, int event, void *data)
 {
+    //constructer methods
+    allocateReadBuffer();
+    read_offset = 0;
+    write_offset = 0;
+
+    //
     int sock;
     int error;
     int len;

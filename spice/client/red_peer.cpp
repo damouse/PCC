@@ -164,7 +164,12 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
             }
             printf("Sending to new socket\n");
             send(buf, sizeof(buf)); //6
-            sleep(5);
+            printf("aftersend\n");
+            /* for(int i = 1; i<2; i++) */
+            /*     { */
+            /*         send(buf,sizeof(buf)); */
+            /*         sleep(1); */
+            /*     } */
 
             
             //
