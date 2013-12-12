@@ -81,6 +81,9 @@ static unsigned long focus_serial = 0;
 
 #ifdef USE_X11_KEYCODE
 
+//mickey
+int counter;
+
 enum EvdevKeyCode {
     EVDEV_KEYCODE_ESCAPE = 9,
     EVDEV_KEYCODE_1,
@@ -790,6 +793,10 @@ void RedWindow_p::handle_key_press_event(RedWindow& window, XKeyEvent* event)
 
 void RedWindow_p::win_proc(XEvent& event)
 {
+    //mickey
+    //printf("%s %i\n", "Event", counter);
+    counter++;
+
     XPointer window_pointer;
     RedWindow* red_window;
     int res;

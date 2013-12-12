@@ -2544,14 +2544,17 @@ static inline std::string function_to_func_name(const std::string& f_name)
 
 void spice_log(unsigned int type, const char *function, const char *format, ...)
 {
+    //mickey
+    //printf("Trying to log inside spice_log\n");
+
     std::string formated_message;
     va_list ap;
     const char *type_as_char[] = { "DEBUG", "INFO", "WARN", "ERROR", "FATAL" };
     const char *type_as_nice_char[] = { "Debug", "Info", "Warning", "Error", "Fatal error" };
 
-    if (type < log_level) {
-      return;
-    }
+    //if (type < log_level) {
+    //  return;
+    //}
 
     ASSERT(type <= LOG_FATAL);
 
@@ -2559,7 +2562,7 @@ void spice_log(unsigned int type, const char *function, const char *format, ...)
     string_vprintf(formated_message, format, ap);
     va_end(ap);
 
-    if (type >= log_level && log_file != NULL) {
+    if (log_file != NULL) {
         fprintf(log_file,"%ld %s [%" PRIu64 ":%" PRIu64 "] %s: %s\n",
                 (long)time(NULL), type_as_char[type],
                 Platform::get_process_id(),
@@ -2671,8 +2674,15 @@ int Application::main(int argc, char** argv, const char* version_str)
     //actual launch: run, show, proc cmd line, init_globals
     std::auto_ptr<Application> app(new Application());
     AutoAbort auto_abort(*app.get());
+
+    //massive cmd-parsing switch statement
     if (app->process_cmd_line(argc, argv, full_screen)) {
+
+        //sets up the platform (running program, process loop, low-level stuff)
+        //and the window (displays content to the user)
         init_platform_globals();
+
+        //core setup: monitors, menus, event listeners, etc
         app->init_remainder();
 
         if (full_screen) {
@@ -2680,7 +2690,8 @@ int Application::main(int argc, char** argv, const char* version_str)
         } else {
             app->_main_screen->show(true, NULL);
         }
-        
+
+        //begins the process loop initialized in the init call above
         ret = app->run();
         cleanup_platform_globals();
     } else {

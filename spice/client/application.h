@@ -53,11 +53,6 @@ class TestTimer;
 #endif
 #endif // USE_GUI
 
-//mickey
-//#ifndef RED_DEBUG
-//class RED_DEBUG;
-//#endif
-
 class ConnectedEvent: public Event {
 public:
     virtual void response(AbstractProcessLoop& events_loop);

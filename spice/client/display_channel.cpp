@@ -1763,6 +1763,7 @@ void DisplayChannel::handle_draw_stroke(RedPeer::InMessage* message)
 
 void DisplayChannel::handle_draw_text(RedPeer::InMessage* message)
 {
+    printf("TEXT\n");
     Canvas *canvas;
     SpiceMsgDisplayDrawText* text = (SpiceMsgDisplayDrawText*)message->data();
     canvas = _surfaces_cache[text->base.surface_id];
