@@ -1278,6 +1278,7 @@ void DisplayChannel::create_canvas(int surface_id, const std::vector<int>& canva
         THROW("create canvas failed");
     }
 
+    /*
     // make sure to refresh the whole display
     SpiceRect rect = { 0, 0, width, height };
     invalidate(rect, true);
@@ -1296,7 +1297,7 @@ void DisplayChannel::create_canvas(int surface_id, const std::vector<int>& canva
         }
     } catch (...) {
         spice_warn_if_reached();
-    }
+    }*/
 }
 
 void DisplayChannel::handle_mode(RedPeer::InMessage* message)

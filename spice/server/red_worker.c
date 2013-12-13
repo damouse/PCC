@@ -46,6 +46,7 @@
 #include <setjmp.h>
 #include <openssl/ssl.h>
 #include <inttypes.h>
+#include <glib.h>
 
 #include <spice/protocol.h>
 #include <spice/qxl_dev.h>
@@ -1019,6 +1020,58 @@ typedef struct RedWorker {
 
     int driver_cap_monitors_config;
     int set_client_capabilities_pending;
+    uint32_t qxl_ram_size;
+    uint32_t last_primary_surface_size;
+    struct {
+        /*
+         * A cache that tries to mirror the image caching in the driver (reuse of resources
+         * for identical images that reside in different drawables).
+         * The cache is used in order to have a better estimation
+         * of the occupied size of the dev ram, by preventing
+         * redundant counts of cached images. However, the cache itself
+         * is an approximation, and it might contain images that are not really cached
+         * by the driver, and it might not contain images that *are* cached by the driver.
+         *
+         * FIXME: it seems that the X driver doesn't use image caching. If images produced by
+         * the driver are redundant, image caching should be implemented.
+         *
+         * key = masked image-id, value = hits-count
+         */
+        GHashTable *qxl_image_cache;
+        /*
+         * Approximation of the total size of objects on the dev ram that are
+         * referenced by the the "current tree", the pipe, or the glz dictionary.
+         * It doesn't include qxl commands that are currently in the cmd ring.
+         * It doesn't include the size of the commands. It includes size of objects
+         * with dynamic size: bitmaps/string/path.
+         * It doesn't include cursor cmds.
+         * It doesn't take into account the driver internal implementation of data allocation
+         * (e.g., alignments).
+         * qxl_image_cache is taken into consideration when updating held_size.
+         *
+         * TODO: add new messages from the drivers to inform the server about the ram status
+         * instead of us evaluating it?
+         */
+        uint32_t held_size;
+        /*
+         * Size of resources that were released and that qxl->st->qif->flush_resources haven't
+         * been called since they were released.
+         * Qemu flushes the resources (i.e., pushes them to the release ring), only after X
+         * resources are released (currently X=32). However, it makes more sense to consider the
+         * size of the resources and not only their count.
+         * max_released_size is intended for approximating the maximum possible size that is
+         * pending to be pushed to the release ring. Then, we can call flush_resources if
+         * it passes some threshold.
+         *
+         * Limitations:
+         * - we don't know when qemu actually flushes the resources. So it might be that max_released_size
+         *   is larger than the real number.
+         * - If the release_ring is full, flush_resources will do nothing, and max_released_size will be
+         *   smaller than the real number.
+         */
+        uint32_t max_released_size;
+        uint32_t max_released_count;
+    } qxl_resources;
 } RedWorker;
 
 typedef enum {
@@ -1059,8 +1112,9 @@ static void red_freeze_glz(DisplayChannelClient *dcc);
 static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
                                          uint64_t* sync_data);
 static void red_display_release_stream_clip(RedWorker *worker, StreamClipItem *item);
-static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
+static void free_one_drawable(RedWorker *worker, int force_glz_free);
 static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable);
+static void red_free_qxl_resources(RedWorker *worker, uint32_t target_release_size);
 static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
                                              SpiceRect *area, PipeItem *pos, int can_lossy);
 static BitmapGradualType _get_bitmap_graduality_level(RedWorker *worker, SpiceBitmap *bitmap,
@@ -1077,6 +1131,8 @@ static void cursor_channel_client_release_item_after_push(CursorChannelClient *c
                                                           PipeItem *item);
 
 static void red_push_monitors_config(DisplayChannelClient *dcc);
+static void add_clip_rects(QRegion *rgn, SpiceClipRects *data);
+static void flush_all_surfaces(RedWorker *worker);
 
 /*
  * Macros to make iterating over stuff easier
@@ -1743,6 +1799,115 @@ static RedDrawable *ref_red_drawable(RedDrawable *drawable)
     return drawable;
 }
 
+#define FREE_QXL_RESOURCES_THRESHOLD(qxl_ram_size, resolution) \
+    (qxl_ram_size - MAX(0.1*qxl_ram_size, resolution))
+#define OOM_FREE_MEM_TARGET(qxl_ram_size, resolution) MAX(2*resolution, 0.2*qxl_ram_size)
+static void red_qxl_res_size_add(RedWorker *worker, RedQXLResources *qxl_res)
+{
+    int i;
+
+    spice_assert(qxl_res);
+
+    worker->qxl_resources.held_size += qxl_res->other_res_size;
+    for (i = 0; i < qxl_res->num_images; i++) {
+        if (qxl_res->images[i]->descriptor.flags & SPICE_IMAGE_FLAGS_CACHE_ME) {
+            uint32_t *p_hits;
+
+            p_hits = g_hash_table_lookup(worker->qxl_resources.qxl_image_cache,
+                                         &qxl_res->images[i]->descriptor.id);
+            if (p_hits) {
+                spice_debug("hit: id=%lu #hits=%d size=%u",
+                            qxl_res->images[i]->descriptor.id,
+                            *p_hits,
+                            qxl_res->images_size[i]);
+                (*p_hits)++;
+            } else {
+                uint64_t *key;
+
+                key = spice_malloc(sizeof(uint64_t));
+                p_hits = spice_malloc(sizeof(uint32_t));
+                *p_hits = 1;
+                *key = qxl_res->images[i]->descriptor.id;
+                g_hash_table_insert(worker->qxl_resources.qxl_image_cache,
+                                    key,
+                                    p_hits);
+                worker->qxl_resources.held_size += qxl_res->images_size[i];
+                spice_debug("no-hit: id=%lu size=%u",
+                            qxl_res->images[i]->descriptor.id,
+                            qxl_res->images_size[i]);
+            }
+        } else {
+            spice_debug("no-hit:                size=%u", qxl_res->images_size[i]);
+            worker->qxl_resources.held_size += qxl_res->images_size[i];
+        }
+    }
+
+    if (worker->qxl_resources.held_size >=
+        FREE_QXL_RESOURCES_THRESHOLD(worker->qxl_ram_size, worker->last_primary_surface_size)) {
+        uint32_t mem_to_free = OOM_FREE_MEM_TARGET(worker->qxl_ram_size,
+                                                   worker->last_primary_surface_size);
+
+        spice_assert(mem_to_free >= worker->qxl_ram_size - worker->qxl_resources.held_size);
+        mem_to_free -= worker->qxl_ram_size - worker->qxl_resources.held_size;
+        spice_debug("try to release %u bytes", mem_to_free);
+        red_free_qxl_resources(worker, mem_to_free);
+    }
+}
+
+static uint32_t red_flush_released_qxl_resources(RedWorker *worker)
+{
+    uint32_t num_flushed;
+
+    /* num flushed is not always correct. It is the number of released
+       resources in the device, but if the release ring is full,
+       they are not pushed */
+    num_flushed = worker->qxl->st->qif->flush_resources(worker->qxl);
+    spice_debug("#flushed=%u computed-max=%u computed-size=%u",
+                num_flushed,
+                worker->qxl_resources.max_released_count,
+                worker->qxl_resources.max_released_size);
+    worker->qxl_resources.max_released_size = 0;
+    worker->qxl_resources.max_released_count = 0;
+    return num_flushed;
+}
+
+#define FLUSH_QXL_RESOURCES_THRESHOLD(qxl_ram_size) (0.2*qxl_ram_size)
+static void red_qxl_res_size_remove(RedWorker *worker, RedQXLResources *qxl_res)
+{
+    uint32_t size = 0;
+    int i;
+
+    spice_assert(qxl_res);
+
+    size += qxl_res->other_res_size;
+    for (i = 0; i < qxl_res->num_images; i++) {
+        if (qxl_res->images[i]->descriptor.flags & SPICE_IMAGE_FLAGS_CACHE_ME) {
+            uint32_t *p_hits;
+
+            p_hits = g_hash_table_lookup(worker->qxl_resources.qxl_image_cache,
+                                         &qxl_res->images[i]->descriptor.id);
+            spice_assert(p_hits);
+            (*p_hits)--;
+            if (*p_hits == 0) {
+                size += qxl_res->images_size[i];
+                g_hash_table_remove(worker->qxl_resources.qxl_image_cache,
+                                    &qxl_res->images[i]->descriptor.id);
+            }
+        } else {
+            size += qxl_res->images_size[i];
+        }
+    }
+    worker->qxl_resources.held_size -= size;
+    worker->qxl_resources.max_released_size += size;
+    worker->qxl_resources.max_released_count++;
+    spice_debug("released-size=%u held-size=%u", size, worker->qxl_resources.held_size);
+    if (worker->qxl_resources.max_released_size >= FLUSH_QXL_RESOURCES_THRESHOLD(worker->qxl_ram_size)) {
+        spice_debug("flushing-released-qxl-res: %u >= %u",
+                    worker->qxl_resources.max_released_size,
+                    (uint32_t)FLUSH_QXL_RESOURCES_THRESHOLD(worker->qxl_ram_size));
+        red_flush_released_qxl_resources(worker);
+    }
+}
 
 static inline void put_red_drawable(RedWorker *worker, RedDrawable *red_drawable,
                                     uint32_t group_id)
@@ -1753,11 +1918,351 @@ static inline void put_red_drawable(RedWorker *worker, RedDrawable *red_drawable
         return;
     }
     worker->red_drawable_count--;
+    red_qxl_res_size_remove(worker, &red_drawable->qxl_res);
     release_info_ext.group_id = group_id;
-    release_info_ext.info = red_drawable->release_info;
+    release_info_ext.info = red_drawable->qxl_res.release_info;
     worker->qxl->st->qif->release_resource(worker->qxl, release_info_ext);
     red_put_drawable(red_drawable);
     free(red_drawable);
+}
+
+/*
+ * Remove from the global lz dictionary glz_drawables that have no reference to
+ * Drawable (are not referenced by the pipe or the current tree)..
+ *
+ * Note: the caller should prevent encoding using the dictionary during the operation
+ */
+static uint32_t red_display_free_independent_glz_qxl_drawables(DisplayChannelClient *dcc,
+                                                               uint32_t target_release_size)
+{
+    RingItem *ring_link;
+    uint32_t start_qxl_size;
+    uint32_t size_diff = 0;
+    uint32_t n = 0;
+
+    if (!dcc) {
+        return 0;
+    }
+    spice_debug("start");
+    start_qxl_size = dcc->common.worker->qxl_resources.held_size;
+
+    ring_link = ring_get_head(&dcc->glz_drawables);
+    while (size_diff < target_release_size && (ring_link != NULL)) {
+        RedGlzDrawable *glz_drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
+        ring_link = ring_next(&dcc->glz_drawables, ring_link);
+        if (!glz_drawable->drawable) {
+            red_display_free_glz_drawable(dcc, glz_drawable);
+            n++;
+            spice_assert(dcc->common.worker->qxl_resources.held_size <= start_qxl_size);
+            size_diff = start_qxl_size - dcc->common.worker->qxl_resources.held_size;
+        }
+    }
+    spice_debug("qxl-release-size=%u #released=%u", size_diff, n);
+    return size_diff;
+}
+
+ /*
+  * Note: the caller should prevent encoding using the dictionary during the operation, since
+  *       drawables that resides in the dictionay might be released.
+  */
+static uint32_t red_free_current_qxl_drawables(RedWorker *worker,
+                                               uint32_t target_release_size)
+{
+    uint32_t start_qxl_size;
+    uint32_t size_diff = 0;
+    uint32_t n = 0;
+
+    spice_debug("start");
+    start_qxl_size = worker->qxl_resources.held_size;
+    while (!ring_is_empty(&worker->current_list) && size_diff < target_release_size) {
+        free_one_drawable(worker, TRUE);
+        n++;
+        spice_assert(worker->qxl_resources.held_size <= start_qxl_size);
+        size_diff = start_qxl_size - worker->qxl_resources.held_size;
+    }
+    spice_debug("qxl-release-size=%u #released=%u", size_diff, n);
+    return size_diff;
+}
+
+/*
+ * Collecting for each surface the region that is modified by the drawables
+ * that are currently present in the pipe.
+ * Then, we can remove all the corresponding pipe items (this will unref the drawables),
+ * and replace them by pipe items of type PIPE_ITEM_TYPE_IMAGE.
+ */
+typedef struct SurfacePipeDrawData {
+    uint32_t surface_id;
+    PipeItem *last_pipe_item;
+    QRegion dirty_region;
+    DisplayChannelClient *dcc;
+} SurfacePipeDrawData;
+
+static gint surface_pipe_draw_data_compare(gconstpointer a, gconstpointer b)
+{
+    SurfacePipeDrawData *a_data = (SurfacePipeDrawData *)a;
+    SurfacePipeDrawData *b_data = (SurfacePipeDrawData *)b;
+
+    return a_data->surface_id == b_data->surface_id ? 0 : a_data->surface_id - b_data->surface_id;
+}
+
+static void surface_pipe_draw_data_destroy(gpointer data)
+{
+    SurfacePipeDrawData *surface_data = data;
+
+    if (surface_data->last_pipe_item) {
+        red_channel_client_pipe_remove_and_release(&surface_data->dcc->common.base,
+                                                   surface_data->last_pipe_item);
+    }
+    region_destroy(&surface_data->dirty_region);
+    free(surface_data);
+}
+
+static int drawable_is_stream_frame(Drawable *drawable, RedChannelClient *rcc)
+{
+    return drawable->stream ||
+           (drawable->sized_stream &&
+            red_channel_client_test_remote_cap(rcc, SPICE_DISPLAY_CAP_SIZED_STREAM));
+}
+
+/*
+ *  Returns the SurfacePipeDrawData that corresponds to the surface-id.
+ *  If there isn't such in the list, creates an empty one and inserts it to the list.
+ */
+static SurfacePipeDrawData *surfaces_pipe_draw_data_list_get_by_id(GList **list,
+                                                                   uint32_t surface_id,
+                                                                   DisplayChannelClient *dcc)
+{
+    GList *surface_data_iter;
+    SurfacePipeDrawData dummy_surface_data;
+    SurfacePipeDrawData *surface_data;
+
+    dummy_surface_data.surface_id = surface_id;
+    surface_data_iter = g_list_find_custom(*list,
+                                           &dummy_surface_data,
+                                           surface_pipe_draw_data_compare);
+    if (surface_data_iter) {
+        surface_data = surface_data_iter->data;
+        spice_assert(surface_data);
+    } else {
+        surface_data = spice_malloc(sizeof(SurfacePipeDrawData));
+        surface_data->surface_id = surface_id;
+        surface_data->dcc = dcc;
+        surface_data->last_pipe_item = NULL;
+        region_init(&surface_data->dirty_region);
+        *list = g_list_prepend(*list, surface_data);
+    }
+    return surface_data;
+}
+
+static void surface_pipe_draw_data_list_add_draw_info(GList **surfaces_data_list,
+                                                      uint32_t surface_id,
+                                                      SpiceRect *bbox,
+                                                      SpiceClip *clip,
+                                                      PipeItem *pipe_item,
+                                                      DisplayChannelClient *dcc)
+{
+    SurfacePipeDrawData *surface_data;
+
+    surface_data = surfaces_pipe_draw_data_list_get_by_id(surfaces_data_list,
+                                                          surface_id,
+                                                          dcc);
+    spice_debug("start");
+    if (clip && clip->type == SPICE_CLIP_TYPE_RECTS) {
+        spice_debug("clip");
+        QRegion draw_region, clip_region;
+
+        region_init(&draw_region);
+        region_init(&clip_region);
+        region_add(&draw_region, bbox);
+        add_clip_rects(&clip_region, clip->rects);
+        region_and(&draw_region, &clip_region);
+        region_or(&surface_data->dirty_region, &draw_region);
+        region_destroy(&clip_region);
+        region_destroy(&draw_region);
+    } else {
+        region_add(&surface_data->dirty_region, bbox);
+    }
+    if (surface_data->last_pipe_item) {
+        red_channel_client_pipe_remove_and_release(&dcc->common.base,
+                                                   surface_data->last_pipe_item);
+    }
+    surface_data->last_pipe_item = pipe_item;
+    spice_debug("end");
+}
+
+static void surface_pipe_draw_data_list_destroy_surface(uint32_t surface_id,
+                                                        GList **surfaces_data_list)
+{
+    GList *surface_data_iter;
+    SurfacePipeDrawData dummy_surface_data;
+
+    dummy_surface_data.surface_id = surface_id;
+    surface_data_iter = g_list_find_custom(*surfaces_data_list,
+                                            &dummy_surface_data,
+                                            surface_pipe_draw_data_compare);
+    if (surface_data_iter) {
+        spice_debug("surface-id=%u", surface_id);
+        surface_pipe_draw_data_destroy(surface_data_iter->data);
+        *surfaces_data_list = g_list_delete_link(*surfaces_data_list, surface_data_iter);
+    }
+}
+
+static void red_display_replace_surface_draw_data_with_image(gpointer data,
+                                                             gpointer user_data)
+{
+    SurfacePipeDrawData *surface_data = data;
+    DisplayChannelClient *dcc = user_data;
+    SpiceRect *rects;
+    uint32_t num_rects;
+    uint32_t i;
+
+    spice_debug("start surface-id=%d", surface_data->surface_id);
+    rects = region_dup_rects(&surface_data->dirty_region, &num_rects);
+    for (i = 0; i < num_rects; i++) {
+        spice_debug("image box (%d, %d) (%d, %d) %dx%d",
+                    rects[i].left, rects[i].top,
+                    rects[i].right, rects[i].bottom,
+                    rects[i].right - rects[i].left,
+                    rects[i].bottom - rects[i].top);
+        red_add_surface_area_image(dcc,
+                                   surface_data->surface_id,
+                                   &rects[i],
+                                   surface_data->last_pipe_item,
+                                   FALSE);
+    }
+    red_channel_client_pipe_remove_and_release(&dcc->common.base,
+                                               surface_data->last_pipe_item);
+    surface_data->last_pipe_item = NULL;
+    free(rects);
+    spice_debug("end");
+}
+
+static void red_display_free_pipe_qxl_drawables(DisplayChannelClient *dcc)
+{
+    Ring *pipe_ring;
+    RingItem *item, *next_item;
+    GList *surfaces_draw_data_list = NULL;
+
+    spice_debug(NULL);
+    /* render everything. However, in practice, red_display_free_pipe_qxl_drawables
+     * should be called only as a last resort, after everything has already
+     * been rendered */
+    flush_all_surfaces(dcc->common.worker);
+
+    pipe_ring = &dcc->common.base.pipe;
+
+    RING_FOREACH_REVERSED_SAFE(item, next_item, pipe_ring) {
+        PipeItem *pipe_item = (PipeItem *)item;
+
+        switch (pipe_item->type) {
+        case PIPE_ITEM_TYPE_DRAW: {
+             DrawablePipeItem *dpi;
+
+            dpi = SPICE_CONTAINEROF(pipe_item, DrawablePipeItem, dpi_pipe_item);
+            if (!drawable_is_stream_frame(dpi->drawable, &dcc->common.base)) {
+                Drawable *drawable = dpi->drawable;
+
+                surface_pipe_draw_data_list_add_draw_info(&surfaces_draw_data_list,
+                                                          drawable->surface_id,
+                                                          &drawable->red_drawable->bbox,
+                                                          &drawable->red_drawable->clip,
+                                                          pipe_item,
+                                                          dcc);
+            }
+            break;
+        }
+        case PIPE_ITEM_TYPE_IMAGE:
+        {
+            ImageItem *image_item = (ImageItem *)pipe_item;
+            SpiceRect bbox;
+
+            bbox.left = image_item->pos.x;
+            bbox.top = image_item->pos.y;
+            bbox.right = image_item->pos.x + image_item->width;
+            bbox.bottom = image_item->pos.y + image_item->height;
+
+           surface_pipe_draw_data_list_add_draw_info(&surfaces_draw_data_list,
+                                                     image_item->surface_id,
+                                                     &bbox,
+                                                     NULL,
+                                                     pipe_item,
+                                                     dcc);
+           break;
+        }
+        case PIPE_ITEM_TYPE_UPGRADE:
+        {
+            Drawable *drawable = ((UpgradeItem *)pipe_item)->drawable;
+
+            surface_pipe_draw_data_list_add_draw_info(&surfaces_draw_data_list,
+                                                      drawable->surface_id,
+                                                      &drawable->red_drawable->bbox,
+                                                      &drawable->red_drawable->clip,
+                                                      pipe_item,
+                                                      dcc);
+            break;
+        }
+        case PIPE_ITEM_TYPE_DESTROY_SURFACE: {
+            SurfaceDestroyItem *destroy_item = SPICE_CONTAINEROF(pipe_item, SurfaceDestroyItem,
+                                                                    pipe_item);
+            surface_pipe_draw_data_list_destroy_surface(destroy_item->surface_destroy.surface_id,
+                                                        &surfaces_draw_data_list);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    g_list_foreach(surfaces_draw_data_list,
+                   red_display_replace_surface_draw_data_with_image,
+                   dcc);
+    g_list_free_full(surfaces_draw_data_list, surface_pipe_draw_data_destroy);
+}
+
+static void red_free_qxl_resources(RedWorker *worker, uint32_t target_release_size)
+{
+    DisplayChannelClient *dcc;
+    RingItem *item, *next;
+    uint32_t released_size = 0;
+
+    spice_debug("start: held-size=%u release-target=%u", worker->qxl_resources.held_size, target_release_size);
+    WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
+        /* encoding using the dictionary is prevented since the following operations might
+           change the dictionary */
+        pthread_rwlock_wrlock(&dcc->glz_dict->encode_lock);
+    }
+    WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
+        if (released_size >= target_release_size) {
+            break;
+        }
+        released_size += red_display_free_independent_glz_qxl_drawables(
+                             dcc,
+                             target_release_size - released_size);
+    }
+
+
+    if (released_size < target_release_size) {
+        released_size += red_free_current_qxl_drawables(worker,
+                                                        target_release_size - released_size);
+    }
+    WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
+        pthread_rwlock_unlock(&dcc->glz_dict->encode_lock);
+    }
+
+    if (released_size < target_release_size) {
+        WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
+            uint32_t start_qxl_size = worker->qxl_resources.held_size;
+            if (released_size >= target_release_size) {
+                break;
+            }
+            red_display_free_pipe_qxl_drawables(dcc);
+            spice_debug("dcc=%p pipe-release-size=%u", dcc, start_qxl_size - worker->qxl_resources.held_size);
+            spice_assert(worker->qxl_resources.held_size <= start_qxl_size);
+            released_size += start_qxl_size - worker->qxl_resources.held_size;
+        }
+    }
+    red_flush_released_qxl_resources(worker);
+    spice_debug("total-release-size=%u", released_size);
 }
 
 static void remove_depended_item(DependItem *item)
@@ -4011,6 +4516,10 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
     return TRUE;
 }
 
+/*
+ * Note: if force_glz_free=TRUE, the caller should prevent encoding
+ * using the dictionary during the operation.
+ */
 static void free_one_drawable(RedWorker *worker, int force_glz_free)
 {
     RingItem *ring_item = ring_get_tail(&worker->current_list);
@@ -4045,6 +4554,7 @@ static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *re
     }
     worker->drawable_count++;
     worker->red_drawable_count++;
+    red_qxl_res_size_add(worker, &red_drawable->qxl_res);
     memset(drawable, 0, sizeof(Drawable));
     drawable->refs = 1;
     clock_gettime(CLOCK_MONOTONIC, &time);
@@ -5081,40 +5591,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
     return n;
 }
 
-#define RED_RELEASE_BUNCH_SIZE 64
-
-static void red_free_some(RedWorker *worker)
-{
-    int n = 0;
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-    spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d", worker->drawable_count,
-                worker->red_drawable_count, worker->glz_drawable_count);
-    WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
-        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
-
-        if (glz_dict) {
-            // encoding using the dictionary is prevented since the following operations might
-            // change the dictionary
-            pthread_rwlock_wrlock(&glz_dict->encode_lock);
-            n = red_display_free_some_independent_glz_drawables(dcc);
-        }
-    }
-
-    while (!ring_is_empty(&worker->current_list) && n++ < RED_RELEASE_BUNCH_SIZE) {
-        free_one_drawable(worker, TRUE);
-    }
-
-    WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
-        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
-
-        if (glz_dict) {
-            pthread_rwlock_unlock(&glz_dict->encode_lock);
-        }
-    }
-}
-
 static void red_current_flush(RedWorker *worker, int surface_id)
 {
     while (!ring_is_empty(&worker->surfaces[surface_id].current_list)) {
@@ -5218,21 +5694,6 @@ typedef struct {
     uint32_t size;
 } AddBufInfo;
 
-static void marshaller_add_compressed(SpiceMarshaller *m,
-                                      RedCompressBuf *comp_buf, size_t size)
-{
-    size_t max = size;
-    size_t now;
-    do {
-        spice_assert(comp_buf);
-        now = MIN(sizeof(comp_buf->buf), max);
-        max -= now;
-        spice_marshaller_add_ref(m, (uint8_t*)comp_buf->buf, now);
-        comp_buf = comp_buf->send_next;
-    } while (max);
-}
-
-
 static void add_buf_from_info(SpiceMarshaller *m, AddBufInfo *info)
 {
     if (info->data) {
@@ -5255,9 +5716,9 @@ static void fill_base(SpiceMarshaller *base_marshaller, Drawable *drawable)
     spice_marshall_DisplayBase(base_marshaller, &base);
 }
 
-static inline void fill_palette(DisplayChannelClient *dcc,
-                                SpicePalette *palette,
-                                uint8_t *flags)
+static inline void spice_palette_set_flags(DisplayChannelClient *dcc,
+                                           SpicePalette *palette,
+                                           uint8_t *flags)
 {
     if (palette == NULL) {
         return;
@@ -5517,31 +5978,6 @@ static void red_display_clear_glz_drawables(DisplayChannel *display_channel)
     DCC_FOREACH_SAFE(link, next, dcc, &display_channel->common.base) {
         red_display_client_clear_glz_drawables(dcc);
     }
-}
-
-/*
- * Remove from the global lz dictionary some glz_drawables that have no reference to
- * Drawable (their qxl drawables are released too).
- * NOTE - the caller should prevent encoding using the dictionary during the operation
- */
-static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc)
-{
-    RingItem *ring_link;
-    int n = 0;
-
-    if (!dcc) {
-        return 0;
-    }
-    ring_link = ring_get_head(&dcc->glz_drawables);
-    while ((n < RED_RELEASE_BUNCH_SIZE) && (ring_link != NULL)) {
-        RedGlzDrawable *glz_drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
-        ring_link = ring_next(&dcc->glz_drawables, ring_link);
-        if (!glz_drawable->drawable) {
-            red_display_free_glz_drawable(dcc, glz_drawable);
-            n++;
-        }
-    }
-    return n;
 }
 
 /******************************************************
@@ -5993,16 +6429,44 @@ static inline int _stride_is_extra(SpiceBitmap *bitmap)
     return 0;
 }
 
-typedef struct compress_send_data_t {
-    void*    comp_buf;
-    uint32_t comp_buf_size;
-    SpicePalette *lzplt_palette;
-    int is_lossy;
-} compress_send_data_t;
+/*
+ * Notes:
+ * The SpiceChunks need to be released.
+ */
+static void red_compress_buf_to_spice_chunks(RedCompressBuf *comp_buf_head,
+                                             size_t comp_size,
+                                             SpiceChunks **chunks)
+{
+    RedCompressBuf *cur_buf;
+    uint32_t num_chunks = 0;
+    size_t  left_size = comp_size;
+    SpiceChunk *cur_chunk;
+
+    for (cur_buf = comp_buf_head; cur_buf; cur_buf = cur_buf->send_next) {
+        num_chunks++;
+    }
+    *chunks = spice_chunks_new(num_chunks);
+    (*chunks)->data_size = comp_size;
+
+    cur_buf = comp_buf_head;
+    cur_chunk = (*chunks)->chunk;
+    while (left_size) {
+        size_t buf_size;
+
+        spice_assert(cur_buf);
+        buf_size = MIN(sizeof(cur_buf->buf), left_size);
+        cur_chunk->data = (uint8_t *)cur_buf->buf;
+        cur_chunk->len = buf_size;
+        left_size -= buf_size;
+        cur_buf = cur_buf->send_next;
+        cur_chunk++;
+    }
+}
 
 static inline int red_glz_compress_image(DisplayChannelClient *dcc,
-                                         SpiceImage *dest, SpiceBitmap *src, Drawable *drawable,
-                                         compress_send_data_t* o_comp_data)
+                                         SpiceImage *dest,
+                                         SpiceBitmap *src,
+                                         Drawable *drawable)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
@@ -6085,25 +6549,25 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
     dest->descriptor.type = SPICE_IMAGE_TYPE_ZLIB_GLZ_RGB;
     dest->u.zlib_glz.glz_data_size = glz_size;
     dest->u.zlib_glz.data_size = zlib_size;
-
-    o_comp_data->comp_buf = zlib_data->data.bufs_head;
-    o_comp_data->comp_buf_size = zlib_size;
+    red_compress_buf_to_spice_chunks(zlib_data->data.bufs_head,
+                                     zlib_size,
+                                     &dest->u.zlib_glz.data);
 
     stat_compress_add(&display_channel->zlib_glz_stat, start_time, glz_size, zlib_size);
     return TRUE;
 glz:
     dest->descriptor.type = SPICE_IMAGE_TYPE_GLZ_RGB;
     dest->u.lz_rgb.data_size = glz_size;
-
-    o_comp_data->comp_buf = glz_data->data.bufs_head;
-    o_comp_data->comp_buf_size = glz_size;
+    red_compress_buf_to_spice_chunks(glz_data->data.bufs_head,
+                                     glz_size,
+                                     &dest->u.lz_rgb.data);
 
     return TRUE;
 }
 
 static inline int red_lz_compress_image(DisplayChannelClient *dcc,
-                                        SpiceImage *dest, SpiceBitmap *src,
-                                        compress_send_data_t* o_comp_data, uint32_t group_id)
+                                        SpiceImage *dest,
+                                        SpiceBitmap *src)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
@@ -6155,9 +6619,9 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
     if (bitmap_fmt_is_rgb(src->format)) {
         dest->descriptor.type = SPICE_IMAGE_TYPE_LZ_RGB;
         dest->u.lz_rgb.data_size = size;
-
-        o_comp_data->comp_buf = lz_data->data.bufs_head;
-        o_comp_data->comp_buf_size = size;
+        red_compress_buf_to_spice_chunks(lz_data->data.bufs_head,
+                                         size,
+                                         &dest->u.lz_rgb.data);
     } else {
         /* masks are 1BIT bitmaps without palettes, but they are not compressed
          * (see fill_mask) */
@@ -6167,21 +6631,20 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
         dest->u.lz_plt.flags = src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN;
         dest->u.lz_plt.palette = src->palette;
         dest->u.lz_plt.palette_id = src->palette->unique;
-        o_comp_data->comp_buf = lz_data->data.bufs_head;
-        o_comp_data->comp_buf_size = size;
-
-        fill_palette(dcc, dest->u.lz_plt.palette, &(dest->u.lz_plt.flags));
-        o_comp_data->lzplt_palette = dest->u.lz_plt.palette;
+        red_compress_buf_to_spice_chunks(lz_data->data.bufs_head,
+                                         size,
+                                         &dest->u.lz_plt.data);
+        spice_palette_set_flags(dcc, dest->u.lz_plt.palette, &(dest->u.lz_plt.flags));
     }
 
     stat_compress_add(&display_channel->lz_stat, start_time, src->stride * src->y,
-                      o_comp_data->comp_buf_size);
+                      size);
     return TRUE;
 }
 
-static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
-                                   SpiceBitmap *src, compress_send_data_t* o_comp_data,
-                                   uint32_t group_id)
+static int red_jpeg_compress_image(DisplayChannelClient *dcc,
+                                   SpiceImage *dest,
+                                   SpiceBitmap *src)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
@@ -6268,13 +6731,12 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
     if (!has_alpha) {
         dest->descriptor.type = SPICE_IMAGE_TYPE_JPEG;
         dest->u.jpeg.data_size = jpeg_size;
-
-        o_comp_data->comp_buf = jpeg_data->data.bufs_head;
-        o_comp_data->comp_buf_size = jpeg_size;
-        o_comp_data->is_lossy = TRUE;
+        red_compress_buf_to_spice_chunks(jpeg_data->data.bufs_head,
+                                         jpeg_size,
+                                         &dest->u.jpeg.data);
 
         stat_compress_add(&display_channel->jpeg_stat, start_time, src->stride * src->y,
-                          o_comp_data->comp_buf_size);
+                          jpeg_size);
         return TRUE;
     }
 
@@ -6312,18 +6774,19 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
 
     dest->u.jpeg_alpha.jpeg_size = jpeg_size;
     dest->u.jpeg_alpha.data_size = jpeg_size + alpha_lz_size;
+    red_compress_buf_to_spice_chunks(jpeg_data->data.bufs_head,
+                                     jpeg_size + alpha_lz_size,
+                                     &dest->u.jpeg_alpha.data);
 
-    o_comp_data->comp_buf = jpeg_data->data.bufs_head;
-    o_comp_data->comp_buf_size = jpeg_size + alpha_lz_size;
-    o_comp_data->is_lossy = TRUE;
     stat_compress_add(&display_channel->jpeg_alpha_stat, start_time, src->stride * src->y,
-                      o_comp_data->comp_buf_size);
+                      jpeg_size + alpha_lz_size);
     return TRUE;
 }
 
-static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
-                                          SpiceBitmap *src, compress_send_data_t* o_comp_data,
-                                          uint32_t group_id)
+static inline int red_quic_compress_image(DisplayChannelClient *dcc,
+                                          SpiceImage *dest,
+                                          SpiceBitmap *src,
+                                          uint32_t x_pixel_offset)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
@@ -6388,7 +6851,9 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
         quic_data->data.u.lines_data.reverse = 1;
         stride = -src->stride;
     }
-    size = quic_encode(quic, type, src->x, src->y, NULL, 0, stride,
+    size = quic_encode(quic, type, src->x, src->y,
+                       x_pixel_offset * BITMAP_FMP_BYTES_PER_PIXEL[src->format],
+                       NULL, 0, stride,
                        quic_data->data.bufs_head->buf,
                        sizeof(quic_data->data.bufs_head->buf) >> 2);
 
@@ -6400,11 +6865,12 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
     dest->descriptor.type = SPICE_IMAGE_TYPE_QUIC;
     dest->u.quic.data_size = size << 2;
 
-    o_comp_data->comp_buf = quic_data->data.bufs_head;
-    o_comp_data->comp_buf_size = size << 2;
+    red_compress_buf_to_spice_chunks(quic_data->data.bufs_head,
+                                     size << 2,
+                                     &dest->u.quic.data);
 
     stat_compress_add(&display_channel->quic_stat, start_time, src->stride * src->y,
-                      o_comp_data->comp_buf_size);
+                      dest->u.quic.data_size);
     return TRUE;
 }
 
@@ -6412,8 +6878,7 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
 #define MIN_DIMENSION_TO_QUIC 3
 static inline int red_compress_image(DisplayChannelClient *dcc,
                                      SpiceImage *dest, SpiceBitmap *src, Drawable *drawable,
-                                     int can_lossy,
-                                     compress_send_data_t* o_comp_data)
+                                     int can_lossy)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     spice_image_compression_t image_compression =
@@ -6473,12 +6938,10 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
             (image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ))) {
             // if we use lz for alpha, the stride can't be extra
             if (src->format != SPICE_BITMAP_FMT_RGBA || !_stride_is_extra(src)) {
-                return red_jpeg_compress_image(dcc, dest,
-                                               src, o_comp_data, drawable->group_id);
+                return red_jpeg_compress_image(dcc, dest, src);
             }
         }
-        return red_quic_compress_image(dcc, dest,
-                                       src, o_comp_data, drawable->group_id);
+        return red_quic_compress_image(dcc, dest, src, 0);
     } else {
         int glz;
         int ret;
@@ -6499,9 +6962,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
             /* using the global dictionary only if it is not frozen */
             pthread_rwlock_rdlock(&dcc->glz_dict->encode_lock);
             if (!dcc->glz_dict->migrate_freeze) {
-                ret = red_glz_compress_image(dcc,
-                                             dest, src,
-                                             drawable, o_comp_data);
+                ret = red_glz_compress_image(dcc, dest, src, drawable);
             } else {
                 glz = FALSE;
             }
@@ -6509,8 +6970,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
         }
 
         if (!glz) {
-            ret = red_lz_compress_image(dcc, dest, src, o_comp_data,
-                                        drawable->group_id);
+            ret = red_lz_compress_image(dcc, dest, src);
 #ifdef COMPRESS_DEBUG
             spice_info("LZ LOCAL compress");
 #endif
@@ -6550,155 +7010,447 @@ static inline void red_display_add_image_to_pixmap_cache(RedChannelClient *rcc,
     }
 }
 
+static void spice_image_marshall(SpiceImage *image, SpiceMarshaller *m, int free_compress_chunks)
+{
+    SpiceMarshaller *bitmap_palette_out, *lzplt_palette_out;
+    SpiceChunks *compress_chunks = NULL;
+
+    spice_marshall_Image(m, image,
+                         &bitmap_palette_out, &lzplt_palette_out);
+
+    spice_assert(bitmap_palette_out == NULL ||
+                 image->descriptor.type == SPICE_IMAGE_TYPE_BITMAP);
+    spice_assert(lzplt_palette_out == NULL ||
+                 image->descriptor.type == SPICE_IMAGE_TYPE_LZ_PLT);
+    switch (image->descriptor.type) {
+        case SPICE_IMAGE_TYPE_SURFACE:
+        case SPICE_IMAGE_TYPE_FROM_CACHE:
+        case SPICE_IMAGE_TYPE_FROM_CACHE_LOSSLESS:
+            break;
+        case SPICE_IMAGE_TYPE_BITMAP:
+            if (bitmap_palette_out && image->u.bitmap.palette) {
+                spice_marshall_Palette(bitmap_palette_out,
+                                       image->u.bitmap.palette);
+            }
+            spice_marshaller_add_ref_chunks(m, image->u.bitmap.data);
+            break;
+        case SPICE_IMAGE_TYPE_QUIC:
+            spice_marshaller_add_ref_chunks(m, image->u.quic.data);
+            compress_chunks = image->u.quic.data;
+            break;
+        case SPICE_IMAGE_TYPE_JPEG:
+            spice_marshaller_add_ref_chunks(m, image->u.jpeg.data);
+            compress_chunks = image->u.jpeg.data;
+            break;
+        case SPICE_IMAGE_TYPE_JPEG_ALPHA:
+            spice_marshaller_add_ref_chunks(m, image->u.jpeg_alpha.data);
+            compress_chunks = image->u.jpeg_alpha.data;
+            break;
+        case SPICE_IMAGE_TYPE_GLZ_RGB:
+        case SPICE_IMAGE_TYPE_LZ_RGB:
+            spice_marshaller_add_ref_chunks(m, image->u.lz_rgb.data);
+            compress_chunks = image->u.lz_rgb.data;
+            break;
+        case SPICE_IMAGE_TYPE_ZLIB_GLZ_RGB:
+            spice_marshaller_add_ref_chunks(m, image->u.zlib_glz.data);
+            compress_chunks = image->u.zlib_glz.data;
+            break;
+        case SPICE_IMAGE_TYPE_LZ_PLT:
+            spice_marshaller_add_ref_chunks(m, image->u.lz_plt.data);
+            compress_chunks = image->u.lz_plt.data;
+            if (lzplt_palette_out && image->u.lz_plt.palette) {
+                spice_marshall_Palette(lzplt_palette_out, image->u.lz_plt.palette);
+            }
+            break;
+        default:
+            spice_error("invalid image type %u", image->descriptor.type);
+    }
+    if (compress_chunks && free_compress_chunks) {
+        spice_chunks_destroy(compress_chunks);
+    }
+    return;
+}
+
+static int spice_image_is_lossy_compressed(SpiceImage *image)
+{
+    return image->descriptor.type == SPICE_IMAGE_TYPE_JPEG ||
+           image->descriptor.type == SPICE_IMAGE_TYPE_JPEG_ALPHA;
+}
+
+/*
+ * Return: TRUE if the image is found in the cache
+ */
+static int spice_image_set_cache_info(DisplayChannelClient *dcc,
+                                      SpiceImage *src_image,
+                                      SpiceImage *dst_image,
+                                      int can_lossy)
+{
+    DisplayChannel *channel;
+    int cache_item_is_lossy;
+    int hit;
+
+    if (!(src_image->descriptor.flags & SPICE_IMAGE_FLAGS_CACHE_ME)) {
+        return FALSE;
+    }
+
+    channel = SPICE_CONTAINEROF(dcc->common.base.channel, DisplayChannel, common.base);
+
+    hit = pixmap_cache_hit(dcc->pixmap_cache,
+                           src_image->descriptor.id,
+                           &cache_item_is_lossy,
+                           dcc);
+    if (!hit)
+        return FALSE;
+
+    dcc->send_data.pixmap_cache_items[dcc->send_data.num_pixmap_cache_items++] =
+                                                            src_image->descriptor.id;
+
+    if (!channel->enable_jpeg) {
+        spice_assert(!cache_item_is_lossy);
+        dst_image->descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE;
+    } else if (can_lossy) {
+        dst_image->descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE;
+    } else {
+        if (cache_item_is_lossy) {
+            pixmap_cache_set_lossy(dcc->pixmap_cache,
+                                   src_image->descriptor.id,
+                                   FALSE);
+            dst_image->descriptor.flags |= SPICE_IMAGE_FLAGS_CACHE_REPLACE_ME;
+            return FALSE;
+        } else {
+            /*
+             * making sure, in a multiple monitor scenario, that lossy items that
+             * should have been replaced with lossless data by one display channel,
+             * will be retrieved as lossless by another display channel.
+             */
+            dst_image->descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE_LOSSLESS;
+        }
+    }
+    return TRUE;
+}
+
+static void spice_image_set_surface_info(DisplayChannelClient *dcc,
+                                         SpiceImage *src_image,
+                                         SpiceImage *dst_image)
+{
+    RedWorker *worker = dcc->common.worker;
+    int surface_id;
+    RedSurface *surface;
+
+    surface_id = src_image->u.surface.surface_id;
+    if (!validate_surface(worker, surface_id)) {
+        rendering_incorrect("SPICE_IMAGE_TYPE_SURFACE");
+    }
+
+    surface = &worker->surfaces[surface_id];
+    dst_image->descriptor.type = SPICE_IMAGE_TYPE_SURFACE;
+    dst_image->descriptor.flags = 0;
+    dst_image->descriptor.width = surface->context.width;
+    dst_image->descriptor.height = surface->context.height;
+
+    dst_image->u.surface.surface_id = surface_id;
+}
+
+/*
+ * The dst_bitmap chunks will point to the minimal subset of src_bitmap lines that contain the rect.
+ * Each chunk will still start from horizontal position 0 of src_bitmap. I.e., each chunk->len % stride is 0.
+ * Notes: dst_bitmap->data (SpiceChunks*) need to be freed after use.
+ */
+static void spice_bitmap_copy_rect(SpiceBitmap *src_bitmap, SpiceBitmap *dst_bitmap, SpiceRect *rect)
+{
+    uint32_t num_chunks = 0;
+    SpiceChunks *src_chunks, *dst_chunks;
+    uint32_t start_line = 0;
+    uint32_t end_line = 0;
+    SpiceChunk *start_chunk = NULL;
+    SpiceChunk *end_chunk = NULL;
+    uint32_t i;
+
+    spice_assert(src_bitmap);
+    spice_assert(dst_bitmap);
+    dst_bitmap->format = src_bitmap->format;
+    dst_bitmap->flags = src_bitmap->flags;
+    dst_bitmap->x = rect->right - rect->left;
+    dst_bitmap->y = rect->bottom - rect->top;
+    dst_bitmap->stride = src_bitmap->stride;
+    dst_bitmap->palette = src_bitmap->palette;
+    dst_bitmap->palette_id = src_bitmap->palette_id;
+
+    if (src_bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN) {
+        start_line = rect->top;
+        end_line = rect->bottom;
+    } else {
+        start_line = src_bitmap->y - rect->bottom;
+        end_line = src_bitmap->y - rect->top;
+    }
+
+    src_chunks = src_bitmap->data;
+    for (i = 0; i < src_chunks->num_chunks; i++) {
+        SpiceChunk *chunk = src_chunks->chunk + i;
+        uint32_t num_lines = chunk->len / src_bitmap->stride;
+
+        if (start_chunk == NULL) {
+            if (start_line >= num_lines) {
+                start_line -= num_lines;
+            } else {
+                start_chunk = chunk;
+                num_chunks++;
+            }
+        } else {
+            num_chunks++;
+        }
+        spice_assert(end_chunk == NULL);
+        if (end_line > num_lines) {
+            end_line -= num_lines;
+        } else {
+            spice_assert(start_chunk != NULL);
+            end_chunk = chunk;
+            break;
+        }
+    }
+    dst_bitmap->data = spice_chunks_new(num_chunks);
+    dst_chunks = dst_bitmap->data;
+    memcpy(dst_chunks->chunk, start_chunk, (end_chunk - start_chunk + 1) * sizeof(SpiceChunk));
+    dst_chunks->data_size = dst_bitmap->stride * dst_bitmap->y;
+    if (src_chunks->flags & SPICE_CHUNKS_FLAGS_UNSTABLE) {
+        dst_chunks->flags = SPICE_CHUNKS_FLAGS_UNSTABLE;
+    }
+    dst_chunks->chunk[num_chunks - 1].len = end_line * dst_bitmap->stride;
+    dst_chunks->chunk[0].len -= start_line * dst_bitmap->stride;
+    dst_chunks->chunk[0].data += start_line * dst_bitmap->stride;
+    spice_debug("CROP: orig-num-chunks=%u orig-size=%u crop-num-chunks=%u crop-size=%u",
+                src_chunks->num_chunks, src_chunks->data_size,
+                dst_chunks->num_chunks, dst_chunks->data_size
+                );
+}
+
+/*
+ * Some "Rough" logic behind the constants:
+ *
+ * We don't want to crop every bitmap for which
+ * the actual used area is smaller than the whole bitmap since:
+ * (1) The bitmap can be cached and reused by other drawables.
+ * (2) currently only quic supports images with width*bpp < stride.
+ *
+ * However, if the bandwidth is low, and just a small part of the
+ * bitmap is used, cropping the bitmap may help decreasing the delay
+ * of display updates.
+ * Lets say we want to avoid bitmaps with > 100ms sending time.
+ * If the bandwidth is 10Mbps, ~125KB is the size limit for 100ms.
+ * Stats show that compression ratio of GLZ images is ~0.05. So the
+ * original bitmap size for this size limit is ~2.5MB
+ * (SPICE_BITMAP_TO_CROP_MIN_SIZE).
+ * Even if the bitmap is compressed better by GLZ than by quic,
+ * quic is around 5 times worse then GLZ on "artificial images", so
+ * if the used bitmap area is 10 times smaller than the whole bitmap area
+ * we can still get about 2 times improvement in the data size sent.
+ * If we compare JPEG to quic, quic is about 10 times worse, so
+ * we may get the same compressed data size, but the compression
+ * time is better.
+ *
+ * TODO:
+ * add support for (stride > width*bpp) for _get_bitmap_graduality_level, LZ, and GLZ
+ */
+#define SPICE_BITMAP_TO_CROP_MIN_SIZE (2.5 * 1024 *1024)
+#define SPICE_BITMAP_CROP_AREA_MAX_RATIO 0.1
+
+/*
+ * If (*to_crop)==TRUE, and the bandwidth is low, and src_rect
+ * comprise a small region of src_image, dst_image will refer
+ * to the cropped region of src_image. Otherwise, *to_crop
+ * will be set to FALSE.
+ */
+static void spice_image_encode_bitmap(DisplayChannelClient *dcc,
+                                      SpiceImage *src_image,
+                                      Drawable   *drawable,
+                                      SpiceImage *dst_image,
+                                      int can_lossy,
+                                      int *to_crop,
+                                      SpiceRect *src_rect)
+{
+    SpiceBitmap *src_bitmap = &src_image->u.bitmap;
+    int try_crop;
+
+#ifdef DUMP_BITMAP
+    dump_bitmap(src_bitmap);
+#endif
+    spice_assert(to_crop && (!*to_crop || src_rect));
+    try_crop = *to_crop;
+    *to_crop = FALSE;
+
+    /* palette bitmaps currently cannot be cropped since lz doesn't support yet
+     * stride > width*bpp */
+    if (try_crop && dcc->common.is_low_bandwidth && !BITMAP_FMT_IS_PLT[src_bitmap->format] &&
+        !(src_image->descriptor.flags & SPICE_IMAGE_FLAGS_CACHE_REPLACE_ME)) {
+        uint32_t src_used_area = rect_get_area(src_rect);
+        uint32_t src_total_area = src_bitmap->x * src_bitmap->y;
+        uint32_t src_size;
+
+        src_size = src_total_area * BITMAP_FMP_BYTES_PER_PIXEL[src_bitmap->format];
+
+        if ((src_size > SPICE_BITMAP_TO_CROP_MIN_SIZE) &&
+            (src_used_area < SPICE_BITMAP_CROP_AREA_MAX_RATIO * src_total_area)) {
+            SpiceBitmap small_bitmap;
+            SpiceImage small_image;
+
+            spice_bitmap_copy_rect(src_bitmap, &small_bitmap, src_rect);
+            small_image.descriptor.id = 0;
+            small_image.descriptor.flags = 0;
+            small_image.descriptor.width = small_bitmap.x;
+            small_image.descriptor.height = small_bitmap.y;
+
+            if (red_quic_compress_image(dcc, &small_image, &small_bitmap, src_rect->left)) {
+                dst_image->descriptor = small_image.descriptor;
+                dst_image->u.quic = small_image.u.quic;
+                *to_crop = TRUE;
+                src_rect->left = src_rect->top = 0;
+                src_rect->right = small_bitmap.x;
+                src_rect->bottom = small_bitmap.y;
+                spice_debug("CROP: used-area=%u (%ux%u) total-area=%u (%ux%u) (%.4f) comp-size=%u",
+                            src_used_area, small_bitmap.x, small_bitmap.y,
+                            src_total_area, src_bitmap->x, src_bitmap->y,
+                            (src_used_area + 0.0) / src_total_area, small_image.u.quic.data_size);
+            }
+            spice_chunks_destroy(small_bitmap.data);
+        }
+    }
+
+    if (*to_crop) {
+        return;
+    }
+
+    /*
+     * Images must be added to the cache only after they are compressed
+     * in order to prevent starvation in the client between pixmap_cache and
+     * global dictionary (in cases of multiple monitors)
+     */
+    if (!red_compress_image(dcc, dst_image, src_bitmap,
+                            drawable, can_lossy)) {
+        SpiceBitmap *dst_bitmap = &dst_image->u.bitmap;
+        *dst_bitmap = *src_bitmap;
+        red_display_add_image_to_pixmap_cache(&dcc->common.base, src_image, dst_image, FALSE);
+
+        dst_bitmap->flags = src_bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN;
+
+        spice_palette_set_flags(dcc, dst_bitmap->palette, &dst_bitmap->flags);
+
+    } else {
+        spice_assert(!spice_image_is_lossy_compressed(dst_image) || can_lossy);
+        red_display_add_image_to_pixmap_cache(&dcc->common.base,
+                                              src_image,
+                                              dst_image,
+                                              spice_image_is_lossy_compressed(dst_image));
+    }
+}
+
+static void spice_image_set_quic_data(DisplayChannelClient *dcc,
+                                      SpiceImage *src_image,
+                                      SpiceImage *dst_image)
+{
+    red_display_add_image_to_pixmap_cache(&dcc->common.base, src_image, dst_image, FALSE);
+    dst_image->descriptor.type = SPICE_IMAGE_TYPE_QUIC;
+    dst_image->u.quic.data_size = src_image->u.quic.data_size;
+    dst_image->u.quic.data = spice_chunks_new(src_image->u.quic.data->num_chunks);
+    dst_image->u.quic.data->data_size = src_image->u.quic.data->data_size;
+    memcpy(dst_image->u.quic.data->chunk, src_image->u.quic.data->chunk,
+           src_image->u.quic.data->num_chunks * sizeof(SpiceChunk));
+}
+
+static void spice_image_encode(DisplayChannelClient *dcc,
+                               SpiceImage *src_image,
+                               Drawable *drawable,
+                               SpiceImage *dst_image,
+                               int can_lossy,
+                               int *to_crop,
+                               SpiceRect *src_rect)
+{
+    spice_assert(dst_image);
+    spice_assert(drawable);
+    spice_assert(to_crop);
+
+    memset(dst_image, 0, sizeof(*dst_image));
+    if (src_image == NULL) {
+        spice_assert(drawable->red_drawable->self_bitmap_image);
+        src_image = drawable->red_drawable->self_bitmap_image;
+    }
+
+    dst_image->descriptor = src_image->descriptor;
+    dst_image->descriptor.flags = 0;
+    if (src_image->descriptor.flags & SPICE_IMAGE_FLAGS_HIGH_BITS_SET) {
+        dst_image->descriptor.flags = SPICE_IMAGE_FLAGS_HIGH_BITS_SET;
+    }
+
+    if (spice_image_set_cache_info(dcc, src_image, dst_image, can_lossy)) {
+        *to_crop = FALSE;
+        return;
+    }
+
+    switch (src_image->descriptor.type) {
+    case SPICE_IMAGE_TYPE_SURFACE:
+        spice_image_set_surface_info(dcc, src_image, dst_image);
+        *to_crop = FALSE;
+        break;
+    case SPICE_IMAGE_TYPE_BITMAP:
+        spice_image_encode_bitmap(dcc, src_image, drawable, dst_image, can_lossy,
+                                  to_crop, src_rect);
+        break;
+    case SPICE_IMAGE_TYPE_QUIC:
+        spice_image_set_quic_data(dcc, src_image, dst_image);
+        *to_crop = FALSE;
+        break;
+    default:
+        spice_error("invalid image type %u", src_image->descriptor.type);
+    }
+}
+
 typedef enum {
-    FILL_BITS_TYPE_INVALID,
-    FILL_BITS_TYPE_CACHE,
-    FILL_BITS_TYPE_SURFACE,
-    FILL_BITS_TYPE_COMPRESS_LOSSLESS,
-    FILL_BITS_TYPE_COMPRESS_LOSSY,
-    FILL_BITS_TYPE_BITMAP,
-} FillBitsType;
+    SPICE_IMAGE_COMPRESS_TYPE_INVALID,
+    SPICE_IMAGE_COMPRESS_TYPE_NONE, // SURFACE, CACHE, BITMAP
+    SPICE_IMAGE_COMPRESS_TYPE_LOSSLESS,
+    SPICE_IMAGE_COMPRESS_TYPE_LOSSY,
+} SpiceImageCompressType;
+
+static SpiceImageCompressType spice_image_get_compress_type(SpiceImage *image)
+{
+    SpiceImageCompressType ret = SPICE_IMAGE_COMPRESS_TYPE_INVALID;
+
+    switch (image->descriptor.type) {
+        case SPICE_IMAGE_TYPE_BITMAP:
+        case SPICE_IMAGE_TYPE_SURFACE:
+        case SPICE_IMAGE_TYPE_FROM_CACHE:
+        case SPICE_IMAGE_TYPE_FROM_CACHE_LOSSLESS:
+            ret = SPICE_IMAGE_COMPRESS_TYPE_NONE;
+            break;
+        case SPICE_IMAGE_TYPE_JPEG:
+        case SPICE_IMAGE_TYPE_JPEG_ALPHA:
+            ret = SPICE_IMAGE_COMPRESS_TYPE_LOSSY;
+            break;
+        case SPICE_IMAGE_TYPE_QUIC:
+        case SPICE_IMAGE_TYPE_GLZ_RGB:
+        case SPICE_IMAGE_TYPE_LZ_RGB:
+        case SPICE_IMAGE_TYPE_ZLIB_GLZ_RGB:
+        case SPICE_IMAGE_TYPE_LZ_PLT:
+            ret = SPICE_IMAGE_COMPRESS_TYPE_LOSSLESS;
+            break;
+        default:
+            spice_error("invalid image type %u", image->descriptor.type);
+    }
+
+    return ret;
+}
 
 /* if the number of times fill_bits can be called per one qxl_drawable increases -
    MAX_LZ_DRAWABLE_INSTANCES must be increased as well */
-static FillBitsType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
-                              SpiceImage *simage, Drawable *drawable, int can_lossy)
+static SpiceImageCompressType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
+                              SpiceImage *src_image, Drawable *drawable, int can_lossy)
 {
-    RedChannelClient *rcc = &dcc->common.base;
-    DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
-    RedWorker *worker = dcc->common.worker;
-    SpiceImage image;
-    compress_send_data_t comp_send_data = {0};
-    SpiceMarshaller *bitmap_palette_out, *lzplt_palette_out;
+    SpiceImage dst_image;
+    int to_crop = FALSE;
 
-    if (simage == NULL) {
-        spice_assert(drawable->red_drawable->self_bitmap_image);
-        simage = drawable->red_drawable->self_bitmap_image;
-    }
+    spice_image_encode(dcc,src_image, drawable, &dst_image, can_lossy, &to_crop, NULL);
+    spice_image_marshall(&dst_image, m, TRUE);
 
-    image.descriptor = simage->descriptor;
-    image.descriptor.flags = 0;
-    if (simage->descriptor.flags & SPICE_IMAGE_FLAGS_HIGH_BITS_SET) {
-        image.descriptor.flags = SPICE_IMAGE_FLAGS_HIGH_BITS_SET;
-    }
-
-    if ((simage->descriptor.flags & SPICE_IMAGE_FLAGS_CACHE_ME)) {
-        int lossy_cache_item;
-        if (pixmap_cache_hit(dcc->pixmap_cache, image.descriptor.id,
-                             &lossy_cache_item, dcc)) {
-            dcc->send_data.pixmap_cache_items[dcc->send_data.num_pixmap_cache_items++] =
-                                                                               image.descriptor.id;
-            if (can_lossy || !lossy_cache_item) {
-                if (!display_channel->enable_jpeg || lossy_cache_item) {
-                    image.descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE;
-                } else {
-                    // making sure, in multiple monitor scenario, that lossy items that
-                    // should have been replaced with lossless data by one display channel,
-                    // will be retrieved as lossless by another display channel.
-                    image.descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE_LOSSLESS;
-                }
-                spice_marshall_Image(m, &image,
-                                     &bitmap_palette_out, &lzplt_palette_out);
-                spice_assert(bitmap_palette_out == NULL);
-                spice_assert(lzplt_palette_out == NULL);
-                stat_inc_counter(display_channel->cache_hits_counter, 1);
-                return FILL_BITS_TYPE_CACHE;
-            } else {
-                pixmap_cache_set_lossy(dcc->pixmap_cache, simage->descriptor.id,
-                                       FALSE);
-                image.descriptor.flags |= SPICE_IMAGE_FLAGS_CACHE_REPLACE_ME;
-            }
-        }
-    }
-
-    switch (simage->descriptor.type) {
-    case SPICE_IMAGE_TYPE_SURFACE: {
-        int surface_id;
-        RedSurface *surface;
-
-        surface_id = simage->u.surface.surface_id;
-        if (!validate_surface(worker, surface_id)) {
-            rendering_incorrect("SPICE_IMAGE_TYPE_SURFACE");
-            return FILL_BITS_TYPE_SURFACE;
-        }
-
-        surface = &worker->surfaces[surface_id];
-        image.descriptor.type = SPICE_IMAGE_TYPE_SURFACE;
-        image.descriptor.flags = 0;
-        image.descriptor.width = surface->context.width;
-        image.descriptor.height = surface->context.height;
-
-        image.u.surface.surface_id = surface_id;
-        spice_marshall_Image(m, &image,
-                             &bitmap_palette_out, &lzplt_palette_out);
-        spice_assert(bitmap_palette_out == NULL);
-        spice_assert(lzplt_palette_out == NULL);
-        return FILL_BITS_TYPE_SURFACE;
-    }
-    case SPICE_IMAGE_TYPE_BITMAP: {
-        SpiceBitmap *bitmap = &image.u.bitmap;
-#ifdef DUMP_BITMAP
-        dump_bitmap(&simage->u.bitmap);
-#endif
-        /* Images must be added to the cache only after they are compressed
-           in order to prevent starvation in the client between pixmap_cache and
-           global dictionary (in cases of multiple monitors) */
-        if (!red_compress_image(dcc, &image, &simage->u.bitmap,
-                                drawable, can_lossy, &comp_send_data)) {
-            SpicePalette *palette;
-
-            red_display_add_image_to_pixmap_cache(rcc, simage, &image, FALSE);
-
-            *bitmap = simage->u.bitmap;
-            bitmap->flags = bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN;
-
-            palette = bitmap->palette;
-            fill_palette(dcc, palette, &bitmap->flags);
-            spice_marshall_Image(m, &image,
-                                 &bitmap_palette_out, &lzplt_palette_out);
-            spice_assert(lzplt_palette_out == NULL);
-
-            if (bitmap_palette_out && palette) {
-                spice_marshall_Palette(bitmap_palette_out, palette);
-            }
-
-            spice_marshaller_add_ref_chunks(m, bitmap->data);
-            return FILL_BITS_TYPE_BITMAP;
-        } else {
-            red_display_add_image_to_pixmap_cache(rcc, simage, &image,
-                                                  comp_send_data.is_lossy);
-
-            spice_marshall_Image(m, &image,
-                                 &bitmap_palette_out, &lzplt_palette_out);
-            spice_assert(bitmap_palette_out == NULL);
-
-            marshaller_add_compressed(m, comp_send_data.comp_buf,
-                                      comp_send_data.comp_buf_size);
-
-            if (lzplt_palette_out && comp_send_data.lzplt_palette) {
-                spice_marshall_Palette(lzplt_palette_out, comp_send_data.lzplt_palette);
-            }
-
-            spice_assert(!comp_send_data.is_lossy || can_lossy);
-            return (comp_send_data.is_lossy ? FILL_BITS_TYPE_COMPRESS_LOSSY :
-                                              FILL_BITS_TYPE_COMPRESS_LOSSLESS);
-        }
-        break;
-    }
-    case SPICE_IMAGE_TYPE_QUIC:
-        red_display_add_image_to_pixmap_cache(rcc, simage, &image, FALSE);
-        image.u.quic = simage->u.quic;
-        spice_marshall_Image(m, &image,
-                             &bitmap_palette_out, &lzplt_palette_out);
-        spice_assert(bitmap_palette_out == NULL);
-        spice_assert(lzplt_palette_out == NULL);
-        spice_marshaller_add_ref_chunks(m, image.u.quic.data);
-        return FILL_BITS_TYPE_COMPRESS_LOSSLESS;
-    default:
-        spice_error("invalid image type %u", image.descriptor.type);
-    }
-
-    return 0;
+    return spice_image_get_compress_type(&dst_image);
 }
 
 static void fill_mask(RedChannelClient *rcc, SpiceMarshaller *m,
@@ -7227,10 +7979,11 @@ static void red_lossy_marshall_qxl_draw_fill(RedWorker *worker,
     }
 }
 
-static FillBitsType red_marshall_qxl_draw_opaque(RedWorker *worker,
-                                             RedChannelClient *rcc,
-                                             SpiceMarshaller *base_marshaller,
-                                             DrawablePipeItem *dpi, int src_allowed_lossy)
+static SpiceImageCompressType red_marshall_qxl_draw_opaque(RedWorker *worker,
+                                                           RedChannelClient *rcc,
+                                                           SpiceMarshaller *base_marshaller,
+                                                           DrawablePipeItem *dpi,
+                                                           int src_allowed_lossy)
 {
     Drawable *item = dpi->drawable;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -7239,19 +7992,30 @@ static FillBitsType red_marshall_qxl_draw_opaque(RedWorker *worker,
     SpiceMarshaller *src_bitmap_out;
     SpiceMarshaller *mask_bitmap_out;
     SpiceOpaque opaque;
-    FillBitsType src_send_type;
+    SpiceImageCompressType src_send_type;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_OPAQUE, &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     opaque = drawable->u.opaque;
+
+    spice_image_encode(dcc,
+                       opaque.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       src_allowed_lossy,
+                       &crop_src_bitmap,
+                       &opaque.src_area);
+
+    src_send_type = spice_image_get_compress_type(&enc_src_bitmap);
     spice_marshall_Opaque(base_marshaller,
                           &opaque,
                           &src_bitmap_out,
                           &brush_pat_out,
                           &mask_bitmap_out);
 
-    src_send_type = fill_bits(dcc, src_bitmap_out, opaque.src_bitmap, item,
-                              src_allowed_lossy);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
 
     if (brush_pat_out) {
         fill_bits(dcc, brush_pat_out, opaque.brush.u.pattern.pat, item, FALSE);
@@ -7294,13 +8058,13 @@ static void red_lossy_marshall_qxl_draw_opaque(RedWorker *worker,
 
     if (!(brush_is_lossy && (brush_bitmap_data.type == BITMAP_DATA_TYPE_SURFACE)) &&
         !(src_is_lossy && (src_bitmap_data.type == BITMAP_DATA_TYPE_SURFACE))) {
-        FillBitsType src_send_type;
+        SpiceImageCompressType src_send_type;
         int has_mask = !!drawable->u.opaque.mask.bitmap;
 
         src_send_type = red_marshall_qxl_draw_opaque(worker, rcc, m, dpi, src_allowed_lossy);
-        if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSY) {
+        if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSY) {
             src_is_lossy = TRUE;
-        } else if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSLESS) {
+        } else if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSLESS) {
             src_is_lossy = FALSE;
         }
 
@@ -7327,10 +8091,11 @@ static void red_lossy_marshall_qxl_draw_opaque(RedWorker *worker,
     }
 }
 
-static FillBitsType red_marshall_qxl_draw_copy(RedWorker *worker,
-                                           RedChannelClient *rcc,
-                                           SpiceMarshaller *base_marshaller,
-                                           DrawablePipeItem *dpi, int src_allowed_lossy)
+static SpiceImageCompressType red_marshall_qxl_draw_copy(RedWorker *worker,
+                                                         RedChannelClient *rcc,
+                                                         SpiceMarshaller *base_marshaller,
+                                                         DrawablePipeItem *dpi,
+                                                         int src_allowed_lossy)
 {
     Drawable *item = dpi->drawable;
     RedDrawable *drawable = item->red_drawable;
@@ -7338,17 +8103,29 @@ static FillBitsType red_marshall_qxl_draw_copy(RedWorker *worker,
     SpiceMarshaller *src_bitmap_out;
     SpiceMarshaller *mask_bitmap_out;
     SpiceCopy copy;
-    FillBitsType src_send_type;
+    SpiceImageCompressType src_send_type;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_COPY, &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     copy = drawable->u.copy;
+
+    spice_image_encode(dcc,
+                       copy.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       src_allowed_lossy,
+                       &crop_src_bitmap,
+                       &copy.src_area);
+
+    src_send_type = spice_image_get_compress_type(&enc_src_bitmap);
     spice_marshall_Copy(base_marshaller,
                         &copy,
                         &src_bitmap_out,
                         &mask_bitmap_out);
 
-    src_send_type = fill_bits(dcc, src_bitmap_out, copy.src_bitmap, item, src_allowed_lossy);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
     fill_mask(rcc, mask_bitmap_out, copy.mask.bitmap, item);
 
     return src_send_type;
@@ -7365,15 +8142,15 @@ static void red_lossy_marshall_qxl_draw_copy(RedWorker *worker,
     int has_mask = !!drawable->u.copy.mask.bitmap;
     int src_is_lossy;
     BitmapData src_bitmap_data;
-    FillBitsType src_send_type;
+    SpiceImageCompressType src_send_type;
 
     src_is_lossy = is_bitmap_lossy(rcc, drawable->u.copy.src_bitmap,
                                    &drawable->u.copy.src_area, item, &src_bitmap_data);
 
     src_send_type = red_marshall_qxl_draw_copy(worker, rcc, base_marshaller, dpi, TRUE);
-    if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSY) {
+    if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSY) {
         src_is_lossy = TRUE;
-    } else if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSLESS) {
+    } else if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSLESS) {
         src_is_lossy = FALSE;
     }
     surface_lossy_region_update(worker, dcc, item, has_mask,
@@ -7381,24 +8158,34 @@ static void red_lossy_marshall_qxl_draw_copy(RedWorker *worker,
 }
 
 static void red_marshall_qxl_draw_transparent(RedWorker *worker,
-                                          RedChannelClient *rcc,
-                                          SpiceMarshaller *base_marshaller,
-                                          DrawablePipeItem *dpi)
+                                              RedChannelClient *rcc,
+                                              SpiceMarshaller *base_marshaller,
+                                              DrawablePipeItem *dpi)
 {
     Drawable *item = dpi->drawable;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
     RedDrawable *drawable = item->red_drawable;
     SpiceMarshaller *src_bitmap_out;
     SpiceTransparent transparent;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_TRANSPARENT,
                                       &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     transparent = drawable->u.transparent;
+    spice_image_encode(dcc,
+                       transparent.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       FALSE,
+                       &crop_src_bitmap,
+                       &transparent.src_area);
+
     spice_marshall_Transparent(base_marshaller,
                                &transparent,
                                &src_bitmap_out);
-    fill_bits(dcc, src_bitmap_out, transparent.src_bitmap, item, FALSE);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
 }
 
 static void red_lossy_marshall_qxl_draw_transparent(RedWorker *worker,
@@ -7429,28 +8216,39 @@ static void red_lossy_marshall_qxl_draw_transparent(RedWorker *worker,
     }
 }
 
-static FillBitsType red_marshall_qxl_draw_alpha_blend(RedWorker *worker,
-                                                  RedChannelClient *rcc,
-                                                  SpiceMarshaller *base_marshaller,
-                                                  DrawablePipeItem *dpi,
-                                                  int src_allowed_lossy)
+static SpiceImageCompressType red_marshall_qxl_draw_alpha_blend(RedWorker *worker,
+                                                                RedChannelClient *rcc,
+                                                                SpiceMarshaller *base_marshaller,
+                                                                DrawablePipeItem *dpi,
+                                                                int src_allowed_lossy)
 {
     Drawable *item = dpi->drawable;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
     RedDrawable *drawable = item->red_drawable;
     SpiceMarshaller *src_bitmap_out;
     SpiceAlphaBlend alpha_blend;
-    FillBitsType src_send_type;
+    SpiceImageCompressType src_send_type;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_ALPHA_BLEND,
                                       &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     alpha_blend = drawable->u.alpha_blend;
+    spice_image_encode(dcc,
+                       alpha_blend.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       src_allowed_lossy,
+                       &crop_src_bitmap,
+                       &alpha_blend.src_area);
+
+    src_send_type = spice_image_get_compress_type(&enc_src_bitmap);
+
     spice_marshall_AlphaBlend(base_marshaller,
                               &alpha_blend,
                               &src_bitmap_out);
-    src_send_type = fill_bits(dcc, src_bitmap_out, alpha_blend.src_bitmap, item,
-                              src_allowed_lossy);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
 
     return src_send_type;
 }
@@ -7465,16 +8263,16 @@ static void red_lossy_marshall_qxl_draw_alpha_blend(RedWorker *worker,
     RedDrawable *drawable = item->red_drawable;
     int src_is_lossy;
     BitmapData src_bitmap_data;
-    FillBitsType src_send_type;
+    SpiceImageCompressType src_send_type;
 
     src_is_lossy = is_bitmap_lossy(rcc, drawable->u.alpha_blend.src_bitmap,
                                    &drawable->u.alpha_blend.src_area, item, &src_bitmap_data);
 
     src_send_type = red_marshall_qxl_draw_alpha_blend(worker, rcc, base_marshaller, dpi, TRUE);
 
-    if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSY) {
+    if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSY) {
         src_is_lossy = TRUE;
-    } else if (src_send_type == FILL_BITS_TYPE_COMPRESS_LOSSLESS) {
+    } else if (src_send_type == SPICE_IMAGE_COMPRESS_TYPE_LOSSLESS) {
         src_is_lossy = FALSE;
     }
 
@@ -7531,9 +8329,9 @@ static void red_lossy_marshall_qxl_copy_bits(RedWorker *worker,
 }
 
 static void red_marshall_qxl_draw_blend(RedWorker *worker,
-                                    RedChannelClient *rcc,
-                                    SpiceMarshaller *base_marshaller,
-                                    DrawablePipeItem *dpi)
+                                        RedChannelClient *rcc,
+                                        SpiceMarshaller *base_marshaller,
+                                        DrawablePipeItem *dpi)
 {
     Drawable *item = dpi->drawable;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -7541,16 +8339,26 @@ static void red_marshall_qxl_draw_blend(RedWorker *worker,
     SpiceMarshaller *src_bitmap_out;
     SpiceMarshaller *mask_bitmap_out;
     SpiceBlend blend;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_BLEND, &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     blend = drawable->u.blend;
+    spice_image_encode(dcc,
+                       blend.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       FALSE,
+                       &crop_src_bitmap,
+                       &blend.src_area);
+
     spice_marshall_Blend(base_marshaller,
                          &blend,
                          &src_bitmap_out,
                          &mask_bitmap_out);
 
-    fill_bits(dcc, src_bitmap_out, blend.src_bitmap, item, FALSE);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
 
     fill_mask(rcc, mask_bitmap_out, blend.mask.bitmap, item);
 }
@@ -7699,9 +8507,9 @@ static void red_lossy_marshall_qxl_draw_inverse(RedWorker *worker,
 }
 
 static void red_marshall_qxl_draw_rop3(RedWorker *worker,
-                                   RedChannelClient *rcc,
-                                   SpiceMarshaller *base_marshaller,
-                                   DrawablePipeItem *dpi)
+                                       RedChannelClient *rcc,
+                                       SpiceMarshaller *base_marshaller,
+                                       DrawablePipeItem *dpi)
 {
     Drawable *item = dpi->drawable;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -7710,17 +8518,27 @@ static void red_marshall_qxl_draw_rop3(RedWorker *worker,
     SpiceMarshaller *src_bitmap_out;
     SpiceMarshaller *brush_pat_out;
     SpiceMarshaller *mask_bitmap_out;
+    SpiceImage enc_src_bitmap;
+    int crop_src_bitmap = TRUE;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_DRAW_ROP3, &dpi->dpi_pipe_item);
     fill_base(base_marshaller, item);
     rop3 = drawable->u.rop3;
+    spice_image_encode(dcc,
+                       rop3.src_bitmap,
+                       item,
+                       &enc_src_bitmap,
+                       FALSE,
+                       &crop_src_bitmap,
+                       &rop3.src_area);
+
     spice_marshall_Rop3(base_marshaller,
                         &rop3,
                         &src_bitmap_out,
                         &brush_pat_out,
                         &mask_bitmap_out);
 
-    fill_bits(dcc, src_bitmap_out, rop3.src_bitmap, item, FALSE);
+    spice_image_marshall(&enc_src_bitmap, src_bitmap_out, TRUE);
 
     if (brush_pat_out) {
         fill_bits(dcc, brush_pat_out, rop3.brush.u.pattern.pat, item, FALSE);
@@ -7784,6 +8602,7 @@ static void red_lossy_marshall_qxl_draw_rop3(RedWorker *worker,
     }
 }
 
+// todo: support crop?
 static void red_marshall_qxl_draw_composite(RedWorker *worker,
                                      RedChannelClient *rcc,
                                      SpiceMarshaller *base_marshaller,
@@ -8658,7 +9477,6 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     spice_image_compression_t comp_mode;
     SpiceMsgDisplayDrawCopy copy;
     SpiceMarshaller *src_bitmap_out, *mask_bitmap_out;
-    SpiceMarshaller *bitmap_palette_out, *lzplt_palette_out;
 
     spice_assert(rcc && display_channel && item);
     worker = display_channel->common.worker;
@@ -8707,8 +9525,6 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     spice_marshall_msg_display_draw_copy(m, &copy,
                                          &src_bitmap_out, &mask_bitmap_out);
 
-    compress_send_data_t comp_send_data = {0};
-
     comp_mode = display_channel->common.worker->image_compression;
 
     if (((comp_mode == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
@@ -8733,31 +9549,19 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
 
     if (lossy_comp) {
         comp_succeeded = red_jpeg_compress_image(dcc, &red_image,
-                                                 &bitmap, &comp_send_data,
-                                                 worker->mem_slots.internal_groupslot_id);
+                                                 &bitmap);
     } else {
         if (!lz_comp) {
-            comp_succeeded = red_quic_compress_image(dcc, &red_image, &bitmap,
-                                                     &comp_send_data,
-                                                     worker->mem_slots.internal_groupslot_id);
+            comp_succeeded = red_quic_compress_image(dcc, &red_image, &bitmap, 0);
         } else {
-            comp_succeeded = red_lz_compress_image(dcc, &red_image, &bitmap,
-                                                   &comp_send_data,
-                                                   worker->mem_slots.internal_groupslot_id);
+            comp_succeeded = red_lz_compress_image(dcc, &red_image, &bitmap);
         }
     }
 
     surface_lossy_region = &dcc->surface_client_lossy_region[item->surface_id];
+    spice_debug(NULL);
     if (comp_succeeded) {
-        spice_marshall_Image(src_bitmap_out, &red_image,
-                             &bitmap_palette_out, &lzplt_palette_out);
-
-        marshaller_add_compressed(src_bitmap_out,
-                                  comp_send_data.comp_buf, comp_send_data.comp_buf_size);
-
-        if (lzplt_palette_out && comp_send_data.lzplt_palette) {
-            spice_marshall_Palette(lzplt_palette_out, comp_send_data.lzplt_palette);
-        }
+        spice_image_marshall(&red_image, src_bitmap_out, TRUE);
 
         if (lossy_comp) {
             region_add(surface_lossy_region, &copy.base.box);
@@ -8767,11 +9571,7 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     } else {
         red_image.descriptor.type = SPICE_IMAGE_TYPE_BITMAP;
         red_image.u.bitmap = bitmap;
-
-        spice_marshall_Image(src_bitmap_out, &red_image,
-                             &bitmap_palette_out, &lzplt_palette_out);
-        spice_marshaller_add_ref(src_bitmap_out, item->data,
-                                 bitmap.y * bitmap.stride);
+        spice_image_marshall(&red_image, src_bitmap_out, TRUE);
         region_remove(surface_lossy_region, &copy.base.box);
     }
     spice_chunks_destroy(chunks);
@@ -8801,7 +9601,6 @@ static void red_display_marshall_upgrade(RedChannelClient *rcc, SpiceMarshaller 
 
     spice_marshall_msg_display_draw_copy(m, &copy,
                                          &src_bitmap_out, &mask_bitmap_out);
-
     fill_bits(dcc, src_bitmap_out, copy.data.src_bitmap, item->drawable, FALSE);
 }
 
@@ -11156,6 +11955,7 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
     red_create_surface(worker, 0, surface.width, surface.height, surface.stride, surface.format,
                        line_0, surface.flags & QXL_SURF_FLAG_KEEP_DATA, TRUE);
     set_monitors_config_to_primary(worker);
+    worker->last_primary_surface_size = surface.height * abs(surface.stride);
 
     if (display_is_connected(worker) && !worker->display_channel->common.during_target_migrate) {
         /* guest created primary, so it will (hopefully) send a monitors_config
@@ -11337,33 +12137,64 @@ void handle_dev_wakeup(void *opaque, void *payload)
 void handle_dev_oom(void *opaque, void *payload)
 {
     RedWorker *worker = opaque;
-
     RedChannel *display_red_channel = &worker->display_channel->common.base;
     int ring_is_empty;
+    int cur_commands;
+    int total_commands = 0;
+    int num_flushed;
+    uint32_t target_free_mem_size;
+    uint32_t observed_free_mem_size;
+
 
     spice_assert(worker->running);
-    // streams? but without streams also leak
-    spice_debug("OOM1 #draw=%u, #red_draw=%u, #glz_draw=%u current %u pipes %u",
+    spice_debug("OOM-START #draw=%u #red_draw=%u #glz_draw=%u "
+                "#current=%u #pipes=%u #qxl-res-size=%u",
                 worker->drawable_count,
                 worker->red_drawable_count,
                 worker->glz_drawable_count,
                 worker->current_size,
                 worker->display_channel ?
-                red_channel_sum_pipes_size(display_red_channel) : 0);
-    while (red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
+                red_channel_sum_pipes_size(display_red_channel) : 0,
+                worker->qxl_resources.held_size);
+    while ((cur_commands = red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty))) {
+        total_commands += cur_commands;
         red_channel_push(&worker->display_channel->common.base);
     }
-    if (worker->qxl->st->qif->flush_resources(worker->qxl) == 0) {
-        red_free_some(worker);
-        worker->qxl->st->qif->flush_resources(worker->qxl);
-    }
-    spice_debug("OOM2 #draw=%u, #red_draw=%u, #glz_draw=%u current %u pipes %u",
+    spice_debug("OOM-POST-PROCESS #draw=%u #red_draw=%u #glz_draw=%u "
+                "#current=%u #pipes=%u #qxl-res-size=%u",
                 worker->drawable_count,
                 worker->red_drawable_count,
                 worker->glz_drawable_count,
                 worker->current_size,
                 worker->display_channel ?
-                red_channel_sum_pipes_size(display_red_channel) : 0);
+                red_channel_sum_pipes_size(display_red_channel) : 0,
+                worker->qxl_resources.held_size);
+    num_flushed = red_flush_released_qxl_resources(worker);
+    target_free_mem_size = OOM_FREE_MEM_TARGET(worker->qxl_ram_size,
+                                               worker->last_primary_surface_size);
+    spice_assert(worker->qxl_ram_size >= worker->qxl_resources.held_size);
+    observed_free_mem_size = worker->qxl_ram_size - worker->qxl_resources.held_size;
+
+    if (target_free_mem_size > observed_free_mem_size) {
+        spice_debug("try to release %u bytes", target_free_mem_size - observed_free_mem_size);
+        red_free_qxl_resources(worker, target_free_mem_size - observed_free_mem_size);
+    } else {
+        spice_debug("target-free-mem < observed (%u < %u)", target_free_mem_size, observed_free_mem_size);
+        if (num_flushed == 0) {
+            spice_debug("try to release %u bytes", (uint32_t)(0.1 * worker->qxl_resources.held_size));
+            red_free_qxl_resources(worker, 0.1 * worker->qxl_resources.held_size);
+        }
+    }
+
+    spice_debug("OOM-END #flushed=%d #process-commands=%d", num_flushed, total_commands);
+    spice_debug("OOM-END #draw=%u, #red_draw=%u, #glz_draw=%u current %u pipes %u, qxl-res-size=%u",
+                worker->drawable_count,
+                worker->red_drawable_count,
+                worker->glz_drawable_count,
+                worker->current_size,
+                worker->display_channel ?
+                red_channel_sum_pipes_size(display_red_channel) : 0,
+                worker->qxl_resources.held_size);
     clear_bit(RED_WORKER_PENDING_OOM, worker->pending);
 }
 
@@ -11879,6 +12710,27 @@ static void handle_dev_input(int fd, int event, void *opaque)
     dispatcher_handle_recv_read(red_dispatcher_get_dispatcher(worker->red_dispatcher));
 }
 
+static guint qxl_image_id_get_hash_value(gconstpointer key)
+{
+    const uint64_t *image_id = key;
+
+    return  *image_id & 0xffffffff;
+}
+
+void qxl_image_cache_value_destroy(gpointer data)
+{
+    free(data);
+}
+
+static void red_init_qxl_image_cache(RedWorker *worker)
+{
+    worker->qxl_resources.qxl_image_cache = g_hash_table_new_full(
+        qxl_image_id_get_hash_value,
+        g_int64_equal,
+        qxl_image_cache_value_destroy,
+        qxl_image_cache_value_destroy);
+}
+
 static void red_init(RedWorker *worker, WorkerInitData *init_data)
 {
     RedWorkerMessage message;
@@ -11942,11 +12794,13 @@ static void red_init(RedWorker *worker, WorkerInitData *init_data)
 
     spice_warn_if(init_data->n_surfaces > NUM_SURFACES);
     worker->n_surfaces = init_data->n_surfaces;
+    worker->qxl_ram_size = init_data->qxl_ram_size;
 
     if (!spice_timer_queue_create()) {
         spice_error("failed to create timer queue");
     }
     srand(time(NULL));
+    red_init_qxl_image_cache(worker);
 
     message = RED_WORKER_MESSAGE_READY;
     write_message(worker->channel, &message);

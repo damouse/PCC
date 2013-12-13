@@ -102,6 +102,8 @@ typedef struct WorkerInitData {
     uint8_t memslot_id_bits;
     uint8_t internal_groupslot_id;
     uint32_t n_surfaces;
+    uint32_t qxl_ram_size; /* qxl portion that is dedicated to qxl commands
+                            * (i.e., doesn't include ram header and surface0) */
     RedDispatcher *red_dispatcher;
 } WorkerInitData;
 
