@@ -75,9 +75,8 @@ void spice_logv(const char *log_domain,
                 const char *format,
                 va_list args)
 {
-
     const char *level = spice_log_level_to_string(log_level);
-
+    
     if (debug_level == -1) {
         debug_level = getenv("SPICE_DEBUG_LEVEL") ? atoi(getenv("SPICE_DEBUG_LEVEL")) : SPICE_LOG_LEVEL_WARNING;
     }
@@ -89,7 +88,7 @@ void spice_logv(const char *log_domain,
     //if (debug_level < log_level)
     //    return;
 
-    printf("(%s:%d): ", getenv("_"), getpid());
+    fprintf(stderr, "(%s:%d): ", getenv("_"), getpid());
 
     if (log_domain) {
         fprintf(stderr, "%s-", log_domain);

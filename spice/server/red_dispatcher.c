@@ -266,12 +266,9 @@ static void update_client_mouse_allowed(void)
     int x_res = 0;
     int y_res = 0;
 
-    printf("Update allowed\n");
-
     if (num_active_workers > 0) {
         allow_now = TRUE;
         RedDispatcher *now = dispatchers;
-
         while (now && allow_now) {
             if (now->primary_active) {
                 allow_now = now->use_hardware_cursor;
