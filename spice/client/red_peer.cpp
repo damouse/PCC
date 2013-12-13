@@ -171,7 +171,7 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
             }
             printf("Sending to new socket\n");
             send(buf, sizeof(buf)); //6
-            printf("aftersend\n");
+            printf("Peer fd: %i\n", _peer);
             /* for(int i = 1; i<2; i++) */
             /*     { */
             /*         send(buf,sizeof(buf)); */
@@ -424,6 +424,12 @@ int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
 
 uint32_t RedPeer::receive(uint8_t *buf, uint32_t size)
 {
+    //changed
+    if(_peer == 40)
+        {
+            int nothing;
+        }
+    printf("Peer receiving: %i\n", _peer);
     uint8_t *pos = buf;
     while (size) {
         int now;
@@ -493,6 +499,8 @@ RedPeer::CompoundInMessage* RedPeer::receive()
 
 uint32_t RedPeer::send(uint8_t *buf, uint32_t size)
 {
+    //changed
+    printf("Peer sending: %i \n", _peer);
     uint8_t *pos = buf;
     while (size) {
         int now;

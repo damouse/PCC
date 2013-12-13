@@ -154,7 +154,6 @@ private:
     struct sockBuffer readBufArray[100];
     //
 };
-
 class RedPeer::InMessage {
 public:
     InMessage(uint16_t type, uint32_t size, uint8_t * data)
