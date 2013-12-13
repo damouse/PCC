@@ -270,7 +270,7 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
             expected += iov[i].iov_len;
             //CHANGED - add
             n += stream_write_cb(s, iov[i].iov_base, iov[i].iov_len);
-            sleep(1);
+            usleep(1000);
             //
         }
         //CHANGED -commented out
@@ -3086,15 +3086,15 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 
 void allocateBuffers()
 {
-    for(int i = 0; i<sizeof(readBufArray); i++)
+    for(int i = 0; i<100; i++)
         {
             readBufArray[i].sockfd = -1;
         }
     /* readBuffer = (char*)malloc(READBUFFERSIZE); */
     /* memset(readBuffer, 0, READBUFFERSIZE); */
 
-    /* writeBuffer = (char*) malloc(WRITEBUFFERSIZE); */
-    /* memset(writeBuffer, 0, WRITEBUFFERSIZE); */
+    writeBuffer = (char*) malloc(WRITEBUFFERSIZE);
+    memset(writeBuffer, 0, WRITEBUFFERSIZE);
 }
 
 void allocateSockBuffer(int sockfd)

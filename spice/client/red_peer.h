@@ -141,9 +141,17 @@ private:
     SSL *_ssl;
 
     //CHANGED -add
-    int read_offset;
-    int write_offset;
-    char* readBuffer;
+    //int read_offset;
+    //int write_offset;
+    //char* readBuffer;
+    struct sockBuffer
+    {
+      char* readBuffer;
+      int read_offset;
+      int write_offset;
+      int sockfd;
+    };
+    struct sockBuffer readBufArray[100];
     //
 };
 

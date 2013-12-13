@@ -47,10 +47,11 @@ RedPeer::RedPeer()
     , _ssl (NULL)
 {
     //CHANGED ADD
-    read_offset = 0;
-    write_offset = 0;
-    readBuffer = (char*)malloc(READBUFFERSIZE);
-    memset(readBuffer, 0, READBUFFERSIZE);
+    for(int i = 0; i< 100; i++)
+        {
+            readBufArray[i].sockfd = -1;
+        }
+
     //
 }
 
@@ -179,6 +180,13 @@ void RedPeer::connect_to_peer(const char* host, int portnr)
 
             
             //
+
+            int index = 0;
+            for(; readBufArray[index].sockfd != -1; index++){}
+            readBufArray[index].read_offset = 0;
+            readBufArray[index].write_offset = 0;
+            readBufArray[index].sockfd = _peer;
+            readBufArray[index].readBuffer = (char*) malloc(READBUFFERSIZE);
             DBG(0, "Connected to %s %s", uaddr, uport);
             break;
         }
@@ -346,64 +354,69 @@ void RedPeer::swap(RedPeer* other)
 int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
 {
     //CHANGED -add
+    int index = 0;
+    for(; readBufArray[index].sockfd != sock; index++){}
+    struct sockBuffer* readSockBuffer = &readBufArray[index]; 
     int readSize = 10000;
     int howMuchRead = 0;
     char* ourBuffer = (char*) malloc(readSize);
     if((readSize = read(sock, ourBuffer, readSize)) != -1)
         {
-            int tmpWriteOffset = (write_offset + readSize) % READBUFFERSIZE;
-            if(read_offset < tmpWriteOffset)
+            int tmpWriteOffset = (readSockBuffer->write_offset + readSize) % READBUFFERSIZE;
+            if(readSockBuffer->read_offset < tmpWriteOffset)
                 {
-                    memcpy(readBuffer + write_offset, ourBuffer, readSize);
+                    memcpy(readSockBuffer->readBuffer + readSockBuffer->write_offset, ourBuffer, readSize);
                 }
             else
                 {
-                    int cpySoFar = READBUFFERSIZE - write_offset;
-                    memcpy(readBuffer + write_offset, ourBuffer, cpySoFar);
-                    memcpy(readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
+                    int cpySoFar = READBUFFERSIZE - readSockBuffer->write_offset;
+                    memcpy(readSockBuffer->readBuffer + readSockBuffer->write_offset, ourBuffer, cpySoFar);
+                    memcpy(readSockBuffer->readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
                 }
-            write_offset = (write_offset + readSize) % READBUFFERSIZE;
+            readSockBuffer->write_offset = (readSockBuffer->write_offset + readSize) % READBUFFERSIZE;
         }
-    if(read_offset != write_offset)
+    if(readSockBuffer->read_offset != readSockBuffer->write_offset)
         {
-            if(read_offset < write_offset) //normal case
+            if(readSockBuffer->read_offset < readSockBuffer->write_offset) //normal case
                 {
-                    if(write_offset - read_offset < size) //want to read more than is there
+                    if(readSockBuffer->write_offset - readSockBuffer->read_offset < size) //want to read more than is there
                         {
-                            howMuchRead = write_offset - read_offset;
-                            memcpy(buf, readBuffer +read_offset, howMuchRead);
+                            howMuchRead = readSockBuffer->write_offset - readSockBuffer->read_offset;
+                            memcpy(buf, readSockBuffer->readBuffer +readSockBuffer->read_offset, howMuchRead);
                         }
                     else //we can read full size
                         {
-                            memcpy(buf, readBuffer + read_offset, size);
+                            memcpy(buf, readSockBuffer->readBuffer + readSockBuffer->read_offset, size);
                             howMuchRead = size;
                         }
-                    read_offset += howMuchRead;
+                    readSockBuffer->read_offset += howMuchRead;
                             
                 }
             else //write buffer has wrapped around
                 {           
-                    if(read_offset + size > READBUFFERSIZE) //then wraparound
+                    if(readSockBuffer->read_offset + size > READBUFFERSIZE) //then wraparound
                         {
-                            int  readSoFar = READBUFFERSIZE - read_offset;
-                            memcpy(buf, readBuffer + read_offset, READBUFFERSIZE - read_offset);
-                            if(write_offset < size - (READBUFFERSIZE - read_offset))//we want to read more than is there
+                            int  readSoFar = READBUFFERSIZE - readSockBuffer->read_offset;
+                            memcpy(buf, readSockBuffer->readBuffer + readSockBuffer->read_offset, READBUFFERSIZE - readSockBuffer->read_offset);
+                            if(readSockBuffer->write_offset < size - (READBUFFERSIZE - readSockBuffer->read_offset))//we want to read more than is there
                                 { 
-                                    memcpy(buf + readSoFar, readBuffer, write_offset);
-                                    howMuchRead = readSoFar + write_offset;
+                                    memcpy(buf + readSoFar, readSockBuffer->readBuffer, readSockBuffer->write_offset);
+                                    howMuchRead = readSoFar + readSockBuffer->write_offset;
                                 }
                             else //there is plenty there to read what they want
                                 {
-                                    memcpy(buf + readSoFar, readBuffer, size - readSoFar);
+                                    memcpy(buf + readSoFar, readSockBuffer->readBuffer, size - readSoFar);
                                     howMuchRead = size;
                                 }
-                            read_offset = howMuchRead - (READBUFFERSIZE - read_offset);
+                            readSockBuffer->read_offset = howMuchRead - (READBUFFERSIZE - readSockBuffer->read_offset);
                         }
                 }
+            free(ourBuffer);
             return howMuchRead;
         }
     else
         {
+            free(ourBuffer);
             return -1;
         }
 
