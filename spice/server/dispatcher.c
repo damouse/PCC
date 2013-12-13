@@ -257,7 +257,7 @@ void dispatcher_init(Dispatcher *dispatcher, size_t max_message_type,
 #endif
     dispatcher->opaque = opaque;
     //CHANGED
-    if (socketpair(AF_LOCAL, SOCK_DGRAM, 0, channels) == -1) {
+    if (socketpair(AF_LOCAL, SOCK_STREAM, 0, channels) == -1) {
         spice_error("socketpair failed %s", strerror(errno));
         return;
     }

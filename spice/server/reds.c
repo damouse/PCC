@@ -125,7 +125,10 @@ static bool exit_on_disconnect = FALSE;
 static RedsState *reds = NULL;
 //CHANGED -add
 char* readBuffer;
-static const int READBUFFERSIZE = 1000000000;
+char* writeBuffer;
+static const int READBUFFERSIZE = 6000000;
+static const int WRITEBUFFERSIZE = 20000000;
+//
 
 typedef struct AsyncRead {
     RedsStream *stream;
@@ -202,9 +205,39 @@ void reds_handle_channel_event(int event, SpiceChannelEventInfo *info)
     }
 }
 
+//CHANGED - add
+static const int CHUNKSIZE = 20000;
+//
 static ssize_t stream_write_cb(RedsStream *s, const void *buf, size_t size)
 {
-    return write(s->socket, buf, size);
+    int curr_write_offset = 0;
+    int writeBufferEnd = 0;
+    memcpy(writeBuffer + writeBufferEnd, buf, size);
+    writeBufferEnd += size;
+    
+    if(size > CHUNKSIZE)
+        {
+            
+            int numChunks = (int) ((int) size / (int)CHUNKSIZE);
+            int finalSend = size % CHUNKSIZE;
+            for(int i = 0; i < numChunks; i++)
+                {
+                    write(s->socket, writeBuffer + curr_write_offset, CHUNKSIZE);
+                    curr_write_offset += CHUNKSIZE;
+                }
+            write(s->socket, writeBuffer + curr_write_offset, finalSend);
+            writeBufferEnd = 0;
+            return size;
+        }
+    else
+        {
+            writeBufferEnd = 0;
+            return write(s->socket, buf, size);
+        }
+
+    //CHANGED - commentd out
+    //    return write(s->socket, buf, size);
+    //
 }
 
 static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovcnt)
@@ -212,17 +245,23 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
     ssize_t ret = 0;
     do {
         int tosend;
-        ssize_t n, expected = 0;
+        ssize_t n = 0, expected = 0;
         int i;
 #ifdef IOV_MAX
         tosend = MIN(iovcnt, IOV_MAX);
 #else
         tosend = iovcnt;
 #endif
+        
         for (i = 0; i < tosend; i++) {
             expected += iov[i].iov_len;
+            //CHANGED - add
+            n += stream_write_cb(s, iov[i].iov_base, iov[i].iov_len);
+            //
         }
-        n = writev(s->socket, iov, tosend);
+        //CHANGED -commented out
+        //        n = writev(s->socket, iov, tosend);
+        //
         if (n <= expected) {
             if (n > 0)
                 ret += n;
@@ -245,17 +284,18 @@ static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
     int readSize = 10000;
     int howMuchRead = 0;
     char* ourBuffer = (char*) malloc(readSize);
-    if(readSize = read(s->socket, ourBuffer, readSize) != -1)
+    if((readSize = read(s->socket, ourBuffer, readSize)) != -1)
         {
-            if(read_offset < write_offset)
+            int tmpWriteOffset = (write_offset + readSize) % READBUFFERSIZE;
+            if(read_offset < tmpWriteOffset)
                 {
-                    memcpy(ourBuffer, readBuffer + write_offset, readSize);
+                    memcpy(readBuffer + write_offset, ourBuffer, readSize);
                 }
             else
                 {
                     int cpySoFar = READBUFFERSIZE - write_offset;
-                    memcpy(ourBuffer, readBuffer + write_offset, cpySoFar);
-                    memcpy(ourBuffer + cpySoFar, readBuffer, readSize - cpySoFar);
+                    memcpy(readBuffer + write_offset, ourBuffer, cpySoFar);
+                    memcpy(readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
                 }
             write_offset = (write_offset + readSize) % READBUFFERSIZE;
         }
@@ -263,7 +303,7 @@ static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
                 {
                     if(read_offset < write_offset) //normal case
                         {
-                            if(read_offset - write_offset < size) //want to read more than is there
+                            if(write_offset - read_offset < size) //want to read more than is there
                                 {
                                     howMuchRead = read_offset - write_offset;
                                     memcpy(buf, readBuffer +read_offset, howMuchRead);
@@ -3024,19 +3064,21 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
     }
 }
 
-void allocateReadBuffer()
+void allocateBuffers()
 {
     readBuffer = (char*)malloc(READBUFFERSIZE);
     memset(readBuffer, 0, READBUFFERSIZE);
+
+    writeBuffer = (char*) malloc(WRITEBUFFERSIZE);
+    memset(writeBuffer, 0, WRITEBUFFERSIZE);
 }
 
 static void reds_accept(int fd, int event, void *data)
 {
     //constructer methods
-    allocateReadBuffer();
+    allocateBuffers();
     read_offset = 0;
     write_offset = 0;
-
     //
     int sock;
     int error;
