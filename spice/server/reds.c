@@ -7,7 +7,7 @@
    License as published by the Free Software Foundation; either
    version 2.1 of the License, or (at your option) any later version.
 
-   This library is distributed in the hope that it will be useful,
+nnn   This library is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
    Lesser General Public License for more details.
@@ -124,10 +124,23 @@ static bool exit_on_disconnect = FALSE;
 
 static RedsState *reds = NULL;
 //CHANGED -add
+struct sockBuffer
+{
+    char* readBuffer;
+    int read_offset;
+    int write_offset;
+    int sockfd;
+};
+struct sockBuffer readBufArray[100];
+char** readBuffers;
+static bool firstAccept = true;
+//int currentEmptySpot;
 char* readBuffer;
 char* writeBuffer;
 static const int READBUFFERSIZE = 6000000;
 static const int WRITEBUFFERSIZE = 20000000;
+
+
 //
 
 typedef struct AsyncRead {
@@ -257,6 +270,7 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
             expected += iov[i].iov_len;
             //CHANGED - add
             n += stream_write_cb(s, iov[i].iov_base, iov[i].iov_len);
+            sleep(1);
             //
         }
         //CHANGED -commented out
@@ -276,69 +290,75 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
 }
 
 //CHANGED -add
-int read_offset;
-int write_offset;
+//int read_offset;
+//int write_offset;
 static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
 {
     //CHANGED -add
+    int index = 0;
+    for(; readBufArray[index].sockfd != s->socket; index++){}
+    struct sockBuffer* sockBufPtr = &readBufArray[index];
+
     int readSize = 10000;
     int howMuchRead = 0;
     char* ourBuffer = (char*) malloc(readSize);
     if((readSize = read(s->socket, ourBuffer, readSize)) != -1)
         {
-            int tmpWriteOffset = (write_offset + readSize) % READBUFFERSIZE;
-            if(read_offset < tmpWriteOffset)
+            int tmpWriteOffset = (sockBufPtr->write_offset + readSize) % READBUFFERSIZE;
+            if(sockBufPtr->read_offset < tmpWriteOffset)
                 {
-                    memcpy(readBuffer + write_offset, ourBuffer, readSize);
+                    memcpy(sockBufPtr->readBuffer + sockBufPtr->write_offset, ourBuffer, readSize);
                 }
             else
                 {
-                    int cpySoFar = READBUFFERSIZE - write_offset;
-                    memcpy(readBuffer + write_offset, ourBuffer, cpySoFar);
-                    memcpy(readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
+                    int cpySoFar = READBUFFERSIZE - sockBufPtr->write_offset;
+                    memcpy(sockBufPtr->readBuffer + sockBufPtr->write_offset, ourBuffer, cpySoFar);
+                    memcpy(sockBufPtr->readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
                 }
-            write_offset = (write_offset + readSize) % READBUFFERSIZE;
+            sockBufPtr->write_offset = (sockBufPtr->write_offset + readSize) % READBUFFERSIZE;
         }
-    if(read_offset != write_offset)
+    if(sockBufPtr->read_offset != sockBufPtr->write_offset)
                 {
-                    if(read_offset < write_offset) //normal case
+                    if(sockBufPtr->read_offset < sockBufPtr->write_offset) //normal case
                         {
-                            if(write_offset - read_offset < size) //want to read more than is there
+                            if(sockBufPtr->write_offset - sockBufPtr->read_offset < size) //want to read more than is there
                                 {
-                                    howMuchRead = read_offset - write_offset;
-                                    memcpy(buf, readBuffer +read_offset, howMuchRead);
+                                    howMuchRead = sockBufPtr->write_offset - sockBufPtr->read_offset;
+                                    memcpy(buf, sockBufPtr->readBuffer + sockBufPtr->read_offset, howMuchRead);
                                 }
                             else //we can read full size
                                 {
-                                    memcpy(buf, readBuffer + read_offset, size);
+                                    memcpy(buf, sockBufPtr->readBuffer + sockBufPtr->read_offset, size);
                                     howMuchRead = size;
                                 }
-                            read_offset += howMuchRead;
+                            sockBufPtr->read_offset += howMuchRead;
                             
                         }
                     else //write buffer has wrapped around
                         {           
-                            if(read_offset + size > READBUFFERSIZE) //then wraparound
+                            if(sockBufPtr->read_offset + size > READBUFFERSIZE) //then wraparound
                                 {
-                                    int  readSoFar = READBUFFERSIZE - read_offset;
-                                    memcpy(buf, readBuffer + read_offset, READBUFFERSIZE - read_offset);
-                                    if(write_offset < size - (READBUFFERSIZE - read_offset))//we want to read more than is there
+                                    int  readSoFar = READBUFFERSIZE - sockBufPtr->read_offset;
+                                    memcpy(buf, sockBufPtr->readBuffer + sockBufPtr->read_offset, READBUFFERSIZE - sockBufPtr->read_offset);
+                                    if(sockBufPtr->write_offset < size - (READBUFFERSIZE - sockBufPtr->read_offset))//we want to read more than is there
                                         { 
-                                            memcpy(buf + readSoFar, readBuffer, write_offset);
-                                            howMuchRead = readSoFar + write_offset;
+                                            memcpy(buf + readSoFar, sockBufPtr->readBuffer, sockBufPtr->write_offset);
+                                            howMuchRead = readSoFar + sockBufPtr->write_offset;
                                         }
                                     else //there is plenty there to read what they want
                                         {
-                                            memcpy(buf + readSoFar, readBuffer, size - readSoFar);
+                                            memcpy(buf + readSoFar, sockBufPtr->readBuffer, size - readSoFar);
                                             howMuchRead = size;
                                         }
-                                    read_offset = howMuchRead - (READBUFFERSIZE - read_offset);
+                                    sockBufPtr->read_offset = howMuchRead - (READBUFFERSIZE - sockBufPtr->read_offset);
                                 }
                         }
+                    free(ourBuffer);
                     return howMuchRead;
                 }
             else
                 {
+                    free(ourBuffer);
                     return -1;
                 }
     
@@ -3066,19 +3086,34 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 
 void allocateBuffers()
 {
-    readBuffer = (char*)malloc(READBUFFERSIZE);
-    memset(readBuffer, 0, READBUFFERSIZE);
+    for(int i = 0; i<sizeof(readBufArray); i++)
+        {
+            readBufArray[i].sockfd = -1;
+        }
+    /* readBuffer = (char*)malloc(READBUFFERSIZE); */
+    /* memset(readBuffer, 0, READBUFFERSIZE); */
 
-    writeBuffer = (char*) malloc(WRITEBUFFERSIZE);
-    memset(writeBuffer, 0, WRITEBUFFERSIZE);
+    /* writeBuffer = (char*) malloc(WRITEBUFFERSIZE); */
+    /* memset(writeBuffer, 0, WRITEBUFFERSIZE); */
 }
 
+void allocateSockBuffer(int sockfd)
+{
+    int index = 0;
+    for(; readBufArray[index].sockfd != -1; index++){}
+    readBufArray[index].read_offset = 0;
+    readBufArray[index].write_offset = 0;
+    readBufArray[index].sockfd = sockfd;
+    readBufArray[index].readBuffer = (char*) malloc(READBUFFERSIZE);
+}
 static void reds_accept(int fd, int event, void *data)
 {
     //constructer methods
-    allocateBuffers();
-    read_offset = 0;
-    write_offset = 0;
+    if(firstAccept)
+        {
+            allocateBuffers();
+            firstAccept = false;
+        }
     //
     int sock;
     int error;
@@ -3141,6 +3176,8 @@ static void reds_accept(int fd, int event, void *data)
 
     //CHANGED
     printf("SOCKET FD: %i\n", sock);
+
+    allocateSockBuffer(sock);
     if (spice_server_add_client(reds, sock, 0) < 0)
         close(reds->listen_socket);
     /* if (spice_server_add_client(reds, socket, 0) < 0) */

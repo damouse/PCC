@@ -1,5 +1,5 @@
 /*
-   Copyright (C) 2009 Red Hat, Inc.
+n   Copyright (C) 2009 Red Hat, Inc.
 
    This library is free software; you can redistribute it and/or
    modify it under the terms of the GNU Lesser General Public
@@ -32,6 +32,9 @@
 #include "debug.h"
 
 class RedPeer: protected EventSources::Socket {
+  //CHANGED ADD
+  static const int READBUFFERSIZE = 50000000;
+
 public:
     RedPeer();
     virtual ~RedPeer();
@@ -115,6 +118,7 @@ public:
     uint32_t do_send(OutMessage& message, uint32_t skip_bytes);
     uint32_t send(OutMessage& message);
 
+    int ourReceive(int sock, char *buf, int size, int doNothing);
     uint32_t receive(uint8_t* buf, uint32_t size);
     uint32_t send(uint8_t* buf, uint32_t size);
 
@@ -135,6 +139,12 @@ private:
 
     SSL_CTX *_ctx;
     SSL *_ssl;
+
+    //CHANGED -add
+    int read_offset;
+    int write_offset;
+    char* readBuffer;
+    //
 };
 
 class RedPeer::InMessage {

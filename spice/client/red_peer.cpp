@@ -46,6 +46,12 @@ RedPeer::RedPeer()
     , _ctx (NULL)
     , _ssl (NULL)
 {
+    //CHANGED ADD
+    read_offset = 0;
+    write_offset = 0;
+    readBuffer = (char*)malloc(READBUFFERSIZE);
+    memset(readBuffer, 0, READBUFFERSIZE);
+    //
 }
 
 RedPeer::~RedPeer()
@@ -337,13 +343,80 @@ void RedPeer::swap(RedPeer* other)
     }
 }
 
+int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
+{
+    //CHANGED -add
+    int readSize = 10000;
+    int howMuchRead = 0;
+    char* ourBuffer = (char*) malloc(readSize);
+    if((readSize = read(sock, ourBuffer, readSize)) != -1)
+        {
+            int tmpWriteOffset = (write_offset + readSize) % READBUFFERSIZE;
+            if(read_offset < tmpWriteOffset)
+                {
+                    memcpy(readBuffer + write_offset, ourBuffer, readSize);
+                }
+            else
+                {
+                    int cpySoFar = READBUFFERSIZE - write_offset;
+                    memcpy(readBuffer + write_offset, ourBuffer, cpySoFar);
+                    memcpy(readBuffer, ourBuffer + cpySoFar, readSize - cpySoFar);
+                }
+            write_offset = (write_offset + readSize) % READBUFFERSIZE;
+        }
+    if(read_offset != write_offset)
+        {
+            if(read_offset < write_offset) //normal case
+                {
+                    if(write_offset - read_offset < size) //want to read more than is there
+                        {
+                            howMuchRead = write_offset - read_offset;
+                            memcpy(buf, readBuffer +read_offset, howMuchRead);
+                        }
+                    else //we can read full size
+                        {
+                            memcpy(buf, readBuffer + read_offset, size);
+                            howMuchRead = size;
+                        }
+                    read_offset += howMuchRead;
+                            
+                }
+            else //write buffer has wrapped around
+                {           
+                    if(read_offset + size > READBUFFERSIZE) //then wraparound
+                        {
+                            int  readSoFar = READBUFFERSIZE - read_offset;
+                            memcpy(buf, readBuffer + read_offset, READBUFFERSIZE - read_offset);
+                            if(write_offset < size - (READBUFFERSIZE - read_offset))//we want to read more than is there
+                                { 
+                                    memcpy(buf + readSoFar, readBuffer, write_offset);
+                                    howMuchRead = readSoFar + write_offset;
+                                }
+                            else //there is plenty there to read what they want
+                                {
+                                    memcpy(buf + readSoFar, readBuffer, size - readSoFar);
+                                    howMuchRead = size;
+                                }
+                            read_offset = howMuchRead - (READBUFFERSIZE - read_offset);
+                        }
+                }
+            return howMuchRead;
+        }
+    else
+        {
+            return -1;
+        }
+
+}
+
 uint32_t RedPeer::receive(uint8_t *buf, uint32_t size)
 {
     uint8_t *pos = buf;
     while (size) {
         int now;
         if (_ctx == NULL) {
-            if ((now = recv(_peer, (char *)pos, size, 0)) <= 0) {
+            //changed recv to ourreevie
+            if ((now = ourReceive(_peer, (char *)pos, size, 0)) <= 0) {
                 int err = sock_error();
                 if (now == SOCKET_ERROR && err == WOULDBLOCK_ERR) {
                     break;
