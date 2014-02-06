@@ -360,14 +360,16 @@ int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
     int readSize = 10000;
     int howMuchRead = 0;
     char* ourBuffer = (char*) malloc(readSize);
+    //if there is stuff to be read from the socket
     if((readSize = read(sock, ourBuffer, readSize)) != -1)
         {
+            //figure out if what we want to write will wrap around.
             int tmpWriteOffset = (readSockBuffer->write_offset + readSize) % READBUFFERSIZE;
-            if(readSockBuffer->read_offset < tmpWriteOffset)
+            if(readSockBuffer->read_offset < tmpWriteOffset) //what we want to write wont wrap around
                 {
                     memcpy(readSockBuffer->readBuffer + readSockBuffer->write_offset, ourBuffer, readSize);
                 }
-            else
+            else //else it will wrap around
                 {
                     int cpySoFar = READBUFFERSIZE - readSockBuffer->write_offset;
                     memcpy(readSockBuffer->readBuffer + readSockBuffer->write_offset, ourBuffer, cpySoFar);
@@ -375,6 +377,7 @@ int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
                 }
             readSockBuffer->write_offset = (readSockBuffer->write_offset + readSize) % READBUFFERSIZE;
         }
+    //if there is stuff in the buffer to read
     if(readSockBuffer->read_offset != readSockBuffer->write_offset)
         {
             if(readSockBuffer->read_offset < readSockBuffer->write_offset) //normal case
@@ -425,11 +428,8 @@ int RedPeer::ourReceive(int sock, char *buf, int size, int doNothing)
 uint32_t RedPeer::receive(uint8_t *buf, uint32_t size)
 {
     //changed
-    if(_peer == 40)
-        {
-            int nothing;
-        }
     printf("Peer receiving: %i\n", _peer);
+    int sizereceived = size;
     uint8_t *pos = buf;
     while (size) {
         int now;
@@ -483,6 +483,7 @@ uint32_t RedPeer::receive(uint8_t *buf, uint32_t size)
             pos += now;
         }
     }
+    printf("Size of Message received by %i: %i\n\n", _peer, sizereceived);
     return pos - buf;
 }
 

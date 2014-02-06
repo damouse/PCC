@@ -124,6 +124,7 @@ static bool exit_on_disconnect = FALSE;
 
 static RedsState *reds = NULL;
 //CHANGED -add
+//holds the readbuffer for a particular socket
 struct sockBuffer
 {
     char* readBuffer;
@@ -131,6 +132,7 @@ struct sockBuffer
     int write_offset;
     int sockfd;
 };
+//holds an array of buffers
 struct sockBuffer readBufArray[100];
 char** readBuffers;
 static bool firstAccept = true;
@@ -228,22 +230,25 @@ static ssize_t stream_write_cb(RedsStream *s, const void *buf, size_t size)
     memcpy(writeBuffer + writeBufferEnd, buf, size);
     writeBufferEnd += size;
     
-    if(size > CHUNKSIZE)
+    if(size > CHUNKSIZE) //we need to divide into chunks to send over udp
         {
             
             int numChunks = (int) ((int) size / (int)CHUNKSIZE);
             int finalSend = size % CHUNKSIZE;
+            //send the chunks
             for(int i = 0; i < numChunks; i++)
                 {
                     write(s->socket, writeBuffer + curr_write_offset, CHUNKSIZE);
                     curr_write_offset += CHUNKSIZE;
                 }
+            //write the last bit
             write(s->socket, writeBuffer + curr_write_offset, finalSend);
             writeBufferEnd = 0;
             return size;
         }
     else
         {
+            //it is small enough to send on its own, so send it.
             writeBufferEnd = 0;
             return write(s->socket, buf, size);
         }
@@ -269,6 +274,7 @@ static ssize_t stream_writev_cb(RedsStream *s, const struct iovec *iov, int iovc
         for (i = 0; i < tosend; i++) {
             expected += iov[i].iov_len;
             //CHANGED - add
+            //call our modified writ method to send whatever they want
             n += stream_write_cb(s, iov[i].iov_base, iov[i].iov_len);
             usleep(1000);
             //
@@ -296,20 +302,24 @@ static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
 {
     //CHANGED -add
     int index = 0;
+    //find the entry in the readbuf array that we are working with
     for(; readBufArray[index].sockfd != s->socket; index++){}
     struct sockBuffer* sockBufPtr = &readBufArray[index];
 
     int readSize = 10000;
     int howMuchRead = 0;
     char* ourBuffer = (char*) malloc(readSize);
+    //if there is stuff to be read
     if((readSize = read(s->socket, ourBuffer, readSize)) != -1)
         {
+            //find how much will be read into the buffer
             int tmpWriteOffset = (sockBufPtr->write_offset + readSize) % READBUFFERSIZE;
+            //if we aren't wrapping around
             if(sockBufPtr->read_offset < tmpWriteOffset)
                 {
                     memcpy(sockBufPtr->readBuffer + sockBufPtr->write_offset, ourBuffer, readSize);
                 }
-            else
+            else //we will have to wrap around
                 {
                     int cpySoFar = READBUFFERSIZE - sockBufPtr->write_offset;
                     memcpy(sockBufPtr->readBuffer + sockBufPtr->write_offset, ourBuffer, cpySoFar);
@@ -317,6 +327,7 @@ static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
                 }
             sockBufPtr->write_offset = (sockBufPtr->write_offset + readSize) % READBUFFERSIZE;
         }
+    //if there is stuff in the buffer to be read
     if(sockBufPtr->read_offset != sockBufPtr->write_offset)
                 {
                     if(sockBufPtr->read_offset < sockBufPtr->write_offset) //normal case
@@ -334,7 +345,7 @@ static ssize_t stream_read_cb(RedsStream *s, void *buf, size_t size)
                             sockBufPtr->read_offset += howMuchRead;
                             
                         }
-                    else //write buffer has wrapped around
+                    else //what we want to read has wrapped around
                         {           
                             if(sockBufPtr->read_offset + size > READBUFFERSIZE) //then wraparound
                                 {
@@ -3086,6 +3097,7 @@ static void reds_accept_ssl_connection(int fd, int event, void *data)
 
 void allocateBuffers()
 {
+    //initalize the readbufarray
     for(int i = 0; i<100; i++)
         {
             readBufArray[i].sockfd = -1;
@@ -3093,6 +3105,7 @@ void allocateBuffers()
     /* readBuffer = (char*)malloc(READBUFFERSIZE); */
     /* memset(readBuffer, 0, READBUFFERSIZE); */
 
+    //for treating udp like tcp when it comes to sending
     writeBuffer = (char*) malloc(WRITEBUFFERSIZE);
     memset(writeBuffer, 0, WRITEBUFFERSIZE);
 }
@@ -3100,6 +3113,7 @@ void allocateBuffers()
 void allocateSockBuffer(int sockfd)
 {
     int index = 0;
+    //find the nearest index in the readbufarray that is open
     for(; readBufArray[index].sockfd != -1; index++){}
     readBufArray[index].read_offset = 0;
     readBufArray[index].write_offset = 0;
@@ -3108,10 +3122,10 @@ void allocateSockBuffer(int sockfd)
 }
 static void reds_accept(int fd, int event, void *data)
 {
-    //constructer methods
+    //constructer methods - we treat this as a class constructor the first time through as it only happens when a client connects
     if(firstAccept)
         {
-            allocateBuffers();
+            allocateBuffers(); //allocate the readbufArray that holds the readbuffers for each socket
             firstAccept = false;
         }
     //
@@ -3134,6 +3148,7 @@ static void reds_accept(int fd, int event, void *data)
     ai.ai_family = PF_UNSPEC;
     ai.ai_socktype = SOCK_DGRAM;    
     //CHANGED ADD
+    //receive on the listen socket - client/channel connect
     recvfrom(reds->listen_socket, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in,  &len); //2
     //    error = getaddrinfo(addr_in.sin_addr.s_addr, addr_in.sin_port, &ai, &result);
     /* if(error != 0) */
@@ -3144,6 +3159,7 @@ static void reds_accept(int fd, int event, void *data)
     addr_out.sin_port = htons(addr_in.sin_port);
     addr_out.sin_addr.s_addr = htonl(addr_in.sin_addr.s_addr);
     printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    //create socet
     if ((sock = socket(/*addr_out.sin_family*/AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         printf("SOCKET CREATION FAILED\n");
     }
@@ -3153,15 +3169,18 @@ static void reds_accept(int fd, int event, void *data)
     /* } */
     
     printf("Sending to IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    //let them know about this socket made for them
     if(sendto(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, len) == -1) //3
         {
             printf("SENDTO ERROR\n");
             spice_error("sendtoerror, %s", strerror(errno));
         }
+    //receive from them again
     recvfrom(sock, buf, sizeof(buf), NULL, (struct sockaddr*) &addr_in, &len); //7
     addr_out = addr_in;
     addr_out.sin_port = ntohs(addr_out.sin_port);
     printf("Received IP: %s Port: %i\n", inet_ntoa(addr_out.sin_addr), addr_out.sin_port);
+    //do a connect so send and write defaults to them on this socket
     if (connect(sock, (struct sockaddr* )&addr_in, len) == -1) { //8
         printf("FAILED TO CONNECT\n");
     }
@@ -3176,7 +3195,8 @@ static void reds_accept(int fd, int event, void *data)
 
     //CHANGED
     printf("SOCKET FD: %i\n", sock);
-
+    
+    //allocate the read buffer for the socket
     allocateSockBuffer(sock);
     if (spice_server_add_client(reds, sock, 0) < 0)
         close(reds->listen_socket);
